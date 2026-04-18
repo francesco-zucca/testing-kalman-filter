@@ -336,3 +336,48 @@ r_squared <- 1 - (ss_res / ss_tot)
 # Printing the model evaluation metrics
 print(paste("R-squared:", round(r_squared, 4)))
 print(paste("Mean Squared Error (MSE):", round(mse, 4)))
+
+### DYNAMIC TETRAD CONSTRAINTS ###
+
+# Function to compute empirical cross-covariance matrix at lag tau
+cross_cov_matrix <- function(y, tau) {
+  TT <- nrow(y)
+  # y_t is from tau+1 to TT
+  y_t <- y[(tau + 1):TT, ]
+  # y_lag is from 1 to TT-tau
+  y_lag <- y[1:(TT - tau), ]
+  
+  # Compute the covariance matrix between y_t and y_lag
+  cov_mat <- cov(y_t, y_lag)
+  return(cov_mat)
+}
+
+# Function to compute the three tetrads for a given covariance matrix
+compute_tetrads <- function(sigma) {
+  t1 <- sigma[1, 2] * sigma[3, 4] - sigma[1, 3] * sigma[2, 4]
+  t2 <- sigma[1, 2] * sigma[3, 4] - sigma[1, 4] * sigma[2, 3]
+  t3 <- sigma[1, 3] * sigma[2, 4] - sigma[1, 4] * sigma[2, 3]
+  
+  return(c(Tetrad_1 = t1, Tetrad_2 = t2, Tetrad_3 = t3))
+}
+
+# We want to check this for a few different lags (e.g., lags 1 through 6)
+max_lag <- 6
+tetrad_results <- matrix(NA, nrow = max_lag, ncol = 3)
+colnames(tetrad_results) <- c("Tetrad_1", "Tetrad_2", "Tetrad_3")
+rownames(tetrad_results) <- paste("Lag", 1:max_lag)
+
+# Loop through the lags, compute the cross-covariance, and extract tetrads
+for (tau in 1:max_lag) {
+  sigma_tau <- cross_cov_matrix(y, tau)
+  tetrad_results[tau, ] <- compute_tetrads(sigma_tau)
+}
+
+# Print the results
+print("Empirical Dynamic Tetrad Constraints (Should be close to 0):")
+print(round(tetrad_results, 4))
+
+sigma_0 <- cov(y)
+tetrad_0 <- compute_tetrads(sigma_0)
+print("Lag 0 (contemporaneous):")
+print(round(tetrad_0, 4))
