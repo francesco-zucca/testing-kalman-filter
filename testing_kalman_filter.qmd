@@ -1,6 +1,43 @@
 ---
-title: "Testing the Kalman Filter"
+title: "Estimating latent factors: the Kalman filter"
 author: "Francesco Zucca, Michael Fehl"
-format: html
+format: pdf
 editor: visual
 ---
+
+# Abstract
+
+# Introduction
+
+In a 1988 working paper, Stock and Watson proposed a way to estimate and forecast the GDP for the US in the short run. The model adopted in their paper is based on the notion that the comovements in many macroeconomic variables that can be captured by a single, underlying, unobserved variable. Therefore, they assumed that the four indicators they use form a dynamic one-factor model with the latent factor that represents economic activity and that, therefore, can be mapped to GDP.
+
+The motive behind this project is to test the model proposed by S&W, verify that the assumptions of one-factor models hold, and test its performance under non-Gaussian distributions.
+
+## 1. The Stock & Watson model
+
+First, we test the model proposed by Stock and Watson. The vector of indicators we will be using is the following:
+
+$$y_t = \begin{bmatrix} y_{1t} \\ y_{2t} \\ y_{3t} \\ y_{4t} \end{bmatrix}$$
+
+where each one of the macroeconomic indicators is represented in log-differences to capture growth rates, and is standardized to adjust for the scale.
+
+The factor we want to extract is the scalar $f_t$, which follows an AR(2) process.
+
+To be able to estimate the factor we apply the Kalman filter to this model, which is defined by two equations:
+
+-   The measurement equation: $y_t = \lambda f_{t} + e_{t}$
+-   The transition equation: $f_{t} = \phi f_{t-1} + w_{t}$
+
+The Kalman filter requires errors $e_t$ to be white noise normal. However, to be able to capture business cycles:
+
+$$f_{t} = \phi_{1}f_{t-1} + \phi_{2}f_{t-2} + w_{t}, \quad w_{t} \sim i.i.d. N(0,1)$$
+
+$$e_{it} = \psi_{i1}e_{i,t-1} + \psi_{i2}e_{i,t-2} + \epsilon_{it}, \quad \epsilon_{it} \sim i.i.d. N(0, \sigma_{i}^{2})$$
+
+**add graphical model**
+
+Given that the errors are not white noise, but follow an AR(2) process, they are incorporated into the state vector of the Kalman filter so that the filter's transition matrix is able to track the autocorrelated memory of the error.
+
+**add graphical model**
+
+### 1.1. Verifying the tetrad constraints
