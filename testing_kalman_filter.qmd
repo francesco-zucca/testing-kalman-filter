@@ -2,7 +2,10 @@
 title: "Estimating latent factors: the Kalman filter"
 author: "Francesco Zucca, Michael Fehl"
 format: pdf
-editor: visual
+execute:
+  echo: false
+  warning: false
+  message: false
 ---
 
 # Abstract
@@ -40,4 +43,123 @@ Given that the errors are not white noise, but follow an AR(2) process, they are
 
 **add graphical model**
 
+```{r}
+### LIBRARIES
+
+library("tidyverse")
+library("readxl")
+library("tidyquant")
+
+### LOADING DATA
+
+# IDs
+ids <- c(
+  "GDPC1",     # Real GDP
+  "INDPRO",    # Industrial Production
+  "CMRMTSPL",  # Manufacturing & Trade Sales
+  "PAYEMS",    # Nonfarm Payrolls
+  "W875RX1"    # Real Personal Income less Transfers 
+)
+
+# Pulling the data via FRED api
+raw_data <- tq_get(ids, get = "economic.data", from = "1969-10-01", to = "2026-01-01")
+
+# Pivoting data in wide format
+data_monthly <- raw_data %>%
+  pivot_wider(names_from = symbol, values_from = price) %>%
+  arrange(date)
+
+# Aligning the GDP measurement
+df_aligned <- data_monthly %>%
+  arrange(date) %>%
+  mutate(GDPC1 = lag(GDPC1, 2))
+
+# Applying log differences to obtain the final dataset
+df_clean <- df_aligned %>%
+  arrange(date) %>%
+  mutate(
+    # Log-difference for the 4 monthly variables (lag = 1)
+    across(c(INDPRO, CMRMTSPL, PAYEMS, W875RX1), 
+           ~ (log(.x) - log(lag(.x, 1))) * 100),
+    
+    # Log-difference for the quarterly GDP (lag = 3)
+    GDPC1 = (log(GDPC1) - log(lag(GDPC1, 3))) * 100
+  ) %>%
+  # Dropping the very first row since month-over-month lag creates an NA
+  drop_na(PAYEMS)
+
+### DEFINING THE DATA ###
+
+# gdp data
+gdp <- df_clean %>%
+  select(GDPC1) %>%
+  drop_na(GDPC1) %>%
+  as.matrix()
+
+# Matrix of indicators
+y_raw <- df_clean %>%
+  select(- date, - GDPC1) %>%
+  as.matrix()
+
+### NORMALIZING DATA ###
+
+# demeaning the y time series and standardizing it
+y <- scale(y_raw)
+
+TT <- nrow(y) # number of observations
+n <- ncol(y) # number of indicators
+
+# normalizing the variance of w to 1
+varQ <- 1
+```
+
 ### 1.1. Verifying the tetrad constraints
+
+The tetrad constraints cannot be identified in a static way anymore, because the one factor model is dynamic. However, we can still verify them on the autocovariance structure (expand the explanation).
+
+```{r}
+### DYNAMIC TETRAD CONSTRAINTS ###
+
+# Function to compute empirical cross-covariance matrix at lag tau
+cross_cov_matrix <- function(y, tau) {
+  TT <- nrow(y)
+  # y_t is from tau+1 to TT
+  y_t <- y[(tau + 1):TT, ]
+  # y_lag is from 1 to TT-tau
+  y_lag <- y[1:(TT - tau), ]
+  
+  # Compute the covariance matrix between y_t and y_lag
+  cov_mat <- cov(y_t, y_lag)
+  return(cov_mat)
+}
+
+# Function to compute the three tetrads for a given covariance matrix
+compute_tetrads <- function(sigma) {
+  t1 <- sigma[1, 2] * sigma[3, 4] - sigma[1, 3] * sigma[2, 4]
+  t2 <- sigma[1, 2] * sigma[3, 4] - sigma[1, 4] * sigma[2, 3]
+  t3 <- sigma[1, 3] * sigma[2, 4] - sigma[1, 4] * sigma[2, 3]
+  
+  return(c(Tetrad_1 = t1, Tetrad_2 = t2, Tetrad_3 = t3))
+}
+
+# We want to check this for a few different lags (e.g., lags 1 through 6)
+max_lag <- 6
+tetrad_results <- matrix(NA, nrow = max_lag, ncol = 3)
+colnames(tetrad_results) <- c("Tetrad_1", "Tetrad_2", "Tetrad_3")
+rownames(tetrad_results) <- paste("Lag", 1:max_lag)
+
+# Loop through the lags, compute the cross-covariance, and extract tetrads
+for (tau in 1:max_lag) {
+  sigma_tau <- cross_cov_matrix(y, tau)
+  tetrad_results[tau, ] <- compute_tetrads(sigma_tau)
+}
+
+# Print the results
+print("Empirical Dynamic Tetrad Constraints (Should be close to 0):")
+print(round(tetrad_results, 4))
+
+sigma_0 <- cov(y)
+tetrad_0 <- compute_tetrads(sigma_0)
+print("Lag 0 (contemporaneous):")
+print(round(tetrad_0, 4))
+```
