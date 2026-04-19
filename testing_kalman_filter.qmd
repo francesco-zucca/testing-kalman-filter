@@ -118,15 +118,14 @@ varQ <- 1
 
 ### 1.2. Latent factor estimation
 
-Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is given by the Kalman filter [@kalman1960]. However, this estimation technique requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the S&W model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor.
+Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is given by the Kalman filter [@kalman1960]. However, this estimation technique requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the S&W model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor. The structural equations simplify to:
 
-The Kalman filter requires errors $e_t$ to be white noise normal. Given that the errors are not white noise, but follow an AR(2) process, they are incorporated into the state vector of the Kalman filter so that the filter's transition matrix is able to track the autocorrelated memory of the error.
+-   The measurement equation: $y_t = H h_{t}$
+-   The factor transition equation: $h_{t} = Fh_{t-1} + v_{t}, \quad v_{t} \sim i.i.d. N(0,\sigma)$
 
-**add graphical model**
+Where $h_{t}$ is the state vector which now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error.
 
-### 
-
-To extract the factor we run the Kalman filter.
+\##
 
 ```{r}
 ### MATRIX FUNCTION ###
