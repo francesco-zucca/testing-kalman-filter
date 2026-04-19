@@ -460,7 +460,7 @@ print(p_qq)
 
 ```
 
-Despite the violation of the Gaussianity assumption, as long as the error presents finite variance, the Kalman filter remains the Best Linear Unbiased Estimator (BLUE). Hence, while it loses efficiency, it still extracts an unbiased estimate of the latent factor. Chapter 2 will be dedicated to an empirical demonstration of the robustness of the Kalman filter, by simulating an the economic model proposed by S&W under increasingly more elliptical distributions.
+Despite the violation of the normality assumption, the Kalman filter extracts a consistent and unbiased estimate of the latent factor. Indeed, when the parameters are estimated via Gaussian quasi-maximum likelihood, consistency of the parameter estimates is preserved under non-Gaussianity, though with loss of efficiency in finite samples as the distribution moves away from Gaussianity and gets increasingly elliptical [@white1982]. Chapter 2 will be dedicated to an empirical demonstration of the robustness of the Kalman filter, by simulating the economic model proposed by S&W under increasingly elliptical distributions.
 
 ## 1.4 Verifying that there is only one underlying factor (TO FINISH)
 
