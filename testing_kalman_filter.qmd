@@ -10,11 +10,11 @@ execute:
 
 # Abstract
 
-# Introduction
-
 In a 1988 working paper, Stock and Watson proposed a way to estimate and forecast the GDP for the US in the short run. The model adopted in their paper is based on the notion that the comovements in many macroeconomic variables that can be captured by a single, underlying, unobserved variable. Therefore, they assumed that the four indicators they use form a dynamic one-factor model with the latent factor that represents economic activity and that, therefore, can be mapped to GDP.
 
-The motive behind this project is to test the model proposed by S&W, verify that the assumptions of one-factor models hold, and test its performance under non-Gaussian distributions.
+The motive behind this project is to test the model proposed by S&W, verify that the assumptions of one-factor models hold, and test its performance under non-Gaussian distributions, which are common with macroeconomic data.
+
+Then, we will try to feed the model more variables, and apply Principal Component Analysis (PCA) to reduce the number of variables such that we still preserve only one latent factor.
 
 ## 1. The Stock & Watson model
 
@@ -121,9 +121,341 @@ n <- ncol(y) # number of indicators
 varQ <- 1
 ```
 
-### 1.1. Verifying the tetrad constraints
+### 1.2. Extracting the factor
 
-The tetrad constraints cannot be identified in a static way anymore, because the one factor model is dynamic. However, we can still verify them on the autocovariance structure (expand the explanation).
+To extract the factor we run the Kalman filter.
+
+```{r}
+### MATRIX FUNCTION ###
+
+# Function that obtains matrices given the input parameter vector th
+# Note that th is the vector of parameters which likelihood will be maximized by the maximum likelihood function
+# the ML function
+matrices <- function(th, n, varQ) {
+  
+  ### H: measurement matrix
+  
+  # Manually defined matrix h1 (used to extract the errors from the h vector)
+  h1 <- rbind(
+    c(1, 0, 0, 0, 0, 0, 0, 0),
+    c(0, 0, 1, 0, 0, 0, 0, 0),
+    c(0, 0, 0, 0, 1, 0, 0, 0),
+    c(0, 0, 0, 0, 0, 0, 1, 0)
+  )
+  # combine the h1 matrix to the first four coefficients (lamba 1 to 4)
+  Hmat <- cbind(th[1:n], matrix(0, nrow = n, ncol = 1), h1)
+  
+  ### F: transition matrix
+  
+  # Manually creating rows of the transition matrix
+  # phi1 and phi2
+  f1  <- c(th[n + 1], th[n + 2], 0, 0, 0, 0, 0, 0, 0, 0)
+  f2  <- c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+  # psi11 and psi12
+  f3  <- c(0, 0, th[n + 3], th[n + 4], 0, 0, 0, 0, 0, 0)
+  f4  <- c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0)
+  # psi21 and psi22
+  f5  <- c(0, 0, 0, 0, th[n + 5], th[n + 6], 0, 0, 0, 0)
+  f6  <- c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0)
+  # psi31 and psi 32
+  f7  <- c(0, 0, 0, 0, 0, 0, th[n + 7], th[n + 8], 0, 0)
+  f8  <- c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0)
+  # psi41 and psi42
+  f9  <- c(0, 0, 0, 0, 0, 0, 0, 0, th[n + 9], th[n + 10])
+  f10 <- c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
+  
+  # Construct the final F matrix
+  Fmat <- rbind(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10)
+  
+  ### R: variance-covariance matrix of the observation equation idiosyncratic error w
+  
+  # In our case it's just a matrix of 0s given that the error got incorporated into 
+  # the signal vector
+  Rmat <- matrix(0, nrow = n, ncol = n)
+  
+  # Q matrix (variance-covariance matrix of state shocks)
+  # Note that the th values here represent the standard deviations of the idiosyncratic
+  # errors (w is the first one, and then epsilon 1 to 4)
+  th2_val <- kronecker(th[(n + 11):(n + 14)]^2, matrix(c(1, 0), ncol = 1))
+  # We create the final diagonal matrix (since correlation between the errors is 0)
+  Qmat <- diag(c(varQ, 0, as.vector(th2_val)))
+  
+  # Finally, put all of the matrices into a list, which will be later unpacked by the 
+  # function to compute the likelihood
+  return(list(Rmat = Rmat, Qmat = Qmat, 
+              Hmat = Hmat, Fmat = Fmat))
+}
+
+### KALMAN FILTER FUNCTION ###
+
+# Objective function for the Likelihood
+kalman <- function(th, y, n, TT, varQ) {
+  
+  # Initialization (pull matrices, set initial values, initialize vectors)
+  
+  # Get matrices
+  mats <- matrices(th, n, varQ)
+  Hmat <- mats$Hmat
+  Fmat <- mats$Fmat
+  Rmat <- mats$Rmat
+  Qmat <- mats$Qmat
+  
+  # Initial state (initial value of the signal): h_{0|0} = 0
+  h00 <- matrix(0, nrow = 10, ncol = 1) 
+  # Initial MSE (initial value of the variance): P_{0|0} = I
+  Pmat00 <- diag(10)
+  
+  # Initializing the vector to store the likelihood
+  like <- matrix(0, nrow = TT, ncol = 1)
+  
+  # Initializing the vector to store the signal
+  filter_mat <- matrix(0, nrow = TT, ncol = 10)
+  
+  # Kalman filter loop
+  
+  # for loop for each observation
+  for(it in 1:TT) {
+    
+    # Step 1: prediction of ht given info at t-1
+    h10 <- Fmat %*% h00                     
+    
+    # Step 2: prediction of Pt given info at t-1
+    Pmat10 <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
+    
+    # Step 3: prediction of yt given info at t-1
+    y10 <- Hmat %*% h10
+    
+    # Step 4: estimation of the forecast error
+    e10 <- matrix(y[it, ], ncol = 1) - y10
+    
+    # Step 5: estimation of the variance of the forecast error
+    Fmat10 <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat                  
+    
+    # Log-Likelihood Calculation (see section 2.3.4)
+    like[it] <- -0.5 * (log(2 * pi * det(Fmat10)) + (t(e10) %*% solve(Fmat10) %*% e10))
+    
+    # Step 6: Kalman gain
+    Kmat <<- Pmat10 %*% t(Hmat) %*% solve(Fmat10)
+    
+    # Step 7: updating of filter and variance
+    # filter
+    h11 <- h10 + Kmat %*% e10
+    # variance
+    Pmat11 <- Pmat10 - Kmat %*% Hmat %*% Pmat10
+    
+    # Iterating
+    filter_mat[it, ] <- t(h11)
+    h00 <- h11
+    Pmat00 <- Pmat11
+  }
+  
+  # Returning a list containing both the likelihood and the extracted matrices
+  return(list(
+    neg_loglik = -sum(like),
+    filter_mat = filter_mat,
+    Fmat = Fmat
+  ))
+}
+
+### FUNCTION THAT RETURNS ONLY THE LIKELIHOOD ###
+
+# optim() requires a function that returns only the scalar to minimize
+ofn <- function(th, y, n, TT, varQ) {
+  res <- kalman(th, y, n, TT, varQ)
+  return(res$neg_loglik)
+}
+
+### COEFFICIENT ESTIMATION ###
+
+# Initial guesses for parameters
+B <- matrix(c(0.9, 0.8, 0.7, 0.6), ncol = 1) # Loadings
+phif <- matrix(0.3, nrow = 2, ncol = 1)      # Factor AR(2) coefficients
+phiy <- matrix(0.3, nrow = n * 2, ncol = 1)  # Error AR(2) coefficients
+v <- matrix(apply(y, 2, sd), ncol = 1)       # Error variances
+
+# Vector of initial parameters
+startval <- rbind(B, phif, phiy, v)
+
+# Maximizing the likelihood function
+opt_res <- optim(par = as.vector(startval), 
+                 fn = ofn,
+                 y = y, n = n, TT = TT, varQ = varQ,
+                 method = "BFGS", 
+                 hessian = TRUE,
+                 control = list(maxit = 2000))
+
+# Computing standard errors
+cramerrao <- solve(opt_res$hessian)
+std_err <- sqrt(diag(cramerrao))
+
+### EXTRACTING THE FINAL FACTOR (Post-Estimation) ###
+
+# Running the filter again with the optimal parameters
+final_kf <- kalman(opt_res$par, y, n, TT, varQ)
+
+# Extracting the filer matrix
+filter_mat <- final_kf$filter_mat
+
+# Extracting the factor
+factor <- filter_mat[, 1]
+
+# Extracting Fmat for the forecast steps
+Fmat <- final_kf$Fmat 
+
+### COVERTING FACTOR TO QUARTERLY GROWTH RATE ###
+
+# Converting monthly factor into a quarterly equivalent
+factorQ <- (1/3) * factor[5:length(factor)] + 
+  (2/3) * factor[4:(length(factor) - 1)] + 
+  factor[3:(length(factor) - 2)] + 
+  (2/3) * factor[2:(length(factor) - 3)] + 
+  (1/3) * factor[1:(length(factor) - 4)]
+
+# Extracting every 3rd month to match quarterly GDP
+i <- 1
+factgdp <- c()
+while(i < (TT - 4)) {
+  factgdp <- c(factgdp, factorQ[i])
+  i <- i + 3
+}
+```
+
+```{r}
+### FORECAST ###
+
+# Extracting the last row of the filter matrix (hT|T)
+hTT <- filter_mat[nrow(filter_mat), ]
+
+# Forecasting
+
+# Estimate the future factor values (just 5 quarters into the future)
+hT1T <- Fmat %*% hTT
+hT2T <- Fmat %*% hT1T
+hT3T <- Fmat %*% hT2T
+hT4T <- Fmat %*% hT3T
+hT5T <- Fmat %*% hT4T
+
+# Append the 5 new forecasted factors (1st element of each state vector) 
+# to the historical factor vector
+factor2 <- c(factor, hT1T[1], hT2T[1], hT3T[1], hT4T[1], hT5T[1])
+
+# Converting to quarterly growth rates
+factor2Q <- (1/3) * factor2[5:length(factor2)] + 
+  (2/3) * factor2[4:(length(factor2) - 1)] + 
+  factor2[3:(length(factor2) - 2)] + 
+  (2/3) * factor2[2:(length(factor2) - 3)] + 
+  (1/3) * factor2[1:(length(factor2) - 4)]
+
+# Downsampling to extract every 3rd month
+length <- length(factor2Q)
+i <- 1
+factgdp2 <- c()
+
+while(i <= length) {
+  fac1 <- factor2Q[i]
+  factgdp2 <- c(factgdp2, fac1)
+  i <- i + 3
+}
+
+# Estimating the GDP
+
+# Defining the data
+y_gdp <- gdp
+
+# Creating the X matrix with a column of 1s for the intercept
+x <- cbind(1, factgdp)
+
+# Computing the OLS coefficients
+b <- solve(t(x) %*% x) %*% t(x) %*% y_gdp
+
+# Generating the forecast, predicting the next two quarters
+yhat1 <- b[1] + b[2] * factgdp2[length(factgdp2) - 1]
+yhat2 <- b[1] + b[2] * factgdp2[length(factgdp2)]
+```
+
+```{r}
+### IN-SAMPLE ESTIMATES OF GDP AND PERFORMANCE MEASURES ###
+
+# Translating all historical factors into estimated GDP 
+gdp_fitted <- x %*% b
+
+# Calculating the residuals
+residuals <- y_gdp - gdp_fitted
+
+# Calculating Mean Squared Error (MSE)
+mse <- mean(residuals^2)
+
+# Calculating R-squared
+ss_tot <- sum((y_gdp - mean(y_gdp))^2)
+ss_res <- sum(residuals^2)
+r_squared <- 1 - (ss_res / ss_tot)
+
+### PLOTTING ###
+
+# Combining the data into a tibble
+plot_data <- tibble(
+  Index = 1:length(y_gdp), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Actual = as.vector(y_gdp),
+  Fitted = as.vector(gdp_fitted)
+) %>%
+  # Pivot to long format for ggplot2
+  pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
+
+# Generating the plot
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+  geom_line(linewidth = 0.8) +
+  
+  # Set specific colors to easily distinguish the series
+  scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
+  
+  # Add titles, labels, and dynamically inject the R-squared and MSE
+  labs(
+    title = "In-Sample Estimation: Actual vs. Fitted GDP",
+    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    x = "Time (Index)", # <--- Update x-axis label
+    y = "GDP Growth (Log Difference)",
+    color = NULL
+  ) +
+  
+  # Apply a clean, academic theme
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "darkgrey", size = 11)
+  )
+```
+
+### 1.3. The normality assumption and the tetrad costraints
+
+The dynamic factor model proposed by Stock and Watson assumes gaussianity. However, given the fairly common shocks of the economy, it is hard to believe that macroeconomic indicators are normally distributed, but they are probably more skewed. Below is quantile-quantile plot of the distribution of our indicators against the ones of the normal distribution.
+
+```{r}
+### CHECKING NORMALITY ASSUMPTION ###
+
+# Reshaping the data to long format
+plot_data <- df_clean %>%
+  select(INDPRO, CMRMTSPL, PAYEMS, W875RX1) %>%
+  pivot_longer(cols = everything(), names_to = "Indicator", values_to = "Value") %>%
+  group_by(Indicator) %>%
+  # Standardize
+  mutate(Value_Scaled = scale(Value))
+
+# Q-Q Plots
+p_qq <- ggplot(plot_data, aes(sample = Value_Scaled)) +
+  stat_qq(color = "steelblue", alpha = 0.6) +
+  stat_qq_line(color = "red3", linewidth = 0.7) +
+  facet_wrap(~Indicator) +
+  theme_minimal() +
+  labs(title = "Normal Q-Q Plot for Macro Indicators",
+       subtitle = "Points deviating from the red line indicate non-Gaussian 'fat tails'",
+       x = "Theoretical Quantiles (Normal)", y = "Sample Quantiles")
+
+print(p_qq)
+
+```
+
+Indeed, the distribution of our indicators is more fat-tailed compared to the one of the normal distribution. However, from our class we know that tetrad constraints to verify that there is only one underlying factor still hold under more elliptical distributions. Note, however, that tetrad constraints cannot be identified in a static way anymore, because the one factor model is dynamic. However, we can still verify them on the autocovariance structure (expand the explanation).
 
 ```{r}
 ### DYNAMIC TETRAD CONSTRAINTS ###
@@ -171,3 +503,5 @@ tetrad_tibble <- as_tibble(tetrad_results, rownames = "Lag")
 # Print the beautiful new tibble
 knitr::kable(tetrad_tibble, digits = 4, caption = "Empirical Dynamic Tetrad Constraints")
 ```
+
+Even though our data is not normal, the Kalman filter is still a consistent and unbiased estimator of the underlying factor, though with non-normal data it is less efficient. We will show this in the next section though a simulation.
