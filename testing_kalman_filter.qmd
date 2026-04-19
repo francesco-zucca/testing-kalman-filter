@@ -11,13 +11,13 @@ references: references.bib
 
 # Abstract
 
-In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that comovements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic one-factor model, where the latent factor represents the state of the business cycle and can therefore be mapped to GDP growth [@S&W1988].
+In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that comovements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic one-factor model, where the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth [@S&W1988].
 
 The objective of this project is to empirically evaluate and extend the Stock and Watson (S&W) model. First, we will verify the assumptions of one-factor models, specifically by testing the tetrad constraints in a dynamic settings. Then, we will asses its predictive performance by replicating the model on more recent data and comparing the estimated latent factor to actual GDP growth. Furthermore, because macroeconomic data frequently exhibits heavy tailed behaviors, we will test the robustness of the Kalman filter by simulating economies under progressively more elliptical distribution.
 
 Finally, we will expand the number of indicators included in the model by incorporating more macroeconomic variables. To avoid adding too many variables, and therefore too much noise to the model, we will apply Sparse Principal Component Analysis (SPCA). Specifically, we will force sparsity on the new indicators, while simultaneously not assigning any penalty to the original four indicators in order to retain them. With this setup, we will ensure that the original four indicators will still represent the foundation of our model, while still squeezing extra predictive value out of a larger dataset.
 
-## 1. The Stock & Watson model
+# 1. The Stock & Watson model
 
 We first replicate model proposed by Stock and Watson. Their model assumes that the comovements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. Formally, the model is represented by the following structural equations:
 
@@ -116,7 +116,7 @@ n <- ncol(y) # number of indicators
 varQ <- 1
 ```
 
-### 1.2. Latent factor estimation
+## 1.1. Latent factor estimation
 
 Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is given by the Kalman filter [@kalman1960]. However, this estimation technique requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the S&W model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor. The structural equations simplify to:
 
@@ -125,7 +125,9 @@ Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be
 
 Where $h_{t}$ is the state vector which now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error.
 
-\##
+## 1.2. Mapping the latent factor to GDP growth
+
+After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
 ```{r}
 ### MATRIX FUNCTION ###
@@ -428,11 +430,11 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
-The model proposed by Stock & Watson indeed works quite well, managing to explain around 76% of the total variance of the gdp.
+The empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.7595$ ). Moreover, the model yields an in-sample MSE of 0.277, translating to a Root Mean Squared Error (RMSE) of roughly 0.526 percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
 
-### 1.3. The normality assumption and the tetrad costraints
+## 1.3. The normality assumption 
 
-The dynamic factor model proposed by Stock and Watson assumes gaussianity. However, given the fairly common shocks of the economy, it is hard to believe that macroeconomic indicators are normally distributed, but they are probably more skewed. Below is quantile-quantile plot of the distribution of our indicators against the ones of the normal distribution.
+The dynamic factor model proposed by Stock and Watson explicitly assumes that all structural shocks are purely Gaussian. However, economic cycles frequently feature sudden and massive shocks (e.g. the COVID-19 crisis), hence macroeconomic indicators are rarely normally distributed. Instead, they tend to exhibit heavy-tailed behavior. As illustrated in the  Quantile-Quantile (Q-Q) plot below, the distribution of our indicators indeed deviates from normality, confirming the presence of fat tails.
 
 ```{r}
 ### CHECKING NORMALITY ASSUMPTION ###
@@ -452,14 +454,17 @@ p_qq <- ggplot(plot_data, aes(sample = Value_Scaled)) +
   facet_wrap(~Indicator) +
   theme_minimal() +
   labs(title = "Normal Q-Q Plot for Macro Indicators",
-       subtitle = "Points deviating from the red line indicate non-Gaussian 'fat tails'",
-       x = "Theoretical Quantiles (Normal)", y = "Sample Quantiles")
+       subtitle = "Points deviating from the red line indicate non-Gaussian 'fat tails'"
 
 print(p_qq)
 
 ```
 
-Indeed, the distribution of our indicators is more fat-tailed compared to the one of the normal distribution. However, from our class we know that tetrad constraints to verify that there is only one underlying factor still hold under more elliptical distributions. Note, however, that tetrad constraints cannot be identified in a static way anymore, because the one factor model is dynamic. However, we can still verify them on the autocovariance structure (expand the explanation).
+Despite the violation of the Gaussianity assumption, as long as the error presents finite variance, the Kalman filter remains the Best Linear Unbiased Estimator (BLUE). Hence, while it loses efficiency, it still extracts an unbiased estimate of the latent factor. Chapter 2 will be dedicated to an empirical demonstration of the robustness of the Kalman filter, by simulating an the economic model proposed by S&W under increasingly more elliptical distributions.
+
+## 1.4 Verifying that there is only one underlying factor (TO FINISH)
+
+However, from our class we know that tetrad constraints to verify that there is only one underlying factor still hold under more elliptical distributions. Note, however, that tetrad constraints cannot be identified in a static way anymore, because the one factor model is dynamic. However, we can still verify them on the autocovariance structure (expand the explanation).
 
 ```{r}
 ### DYNAMIC TETRAD CONSTRAINTS ###
@@ -508,4 +513,4 @@ tetrad_tibble <- as_tibble(tetrad_results, rownames = "Lag")
 knitr::kable(tetrad_tibble, digits = 4, caption = "Empirical Dynamic Tetrad Constraints")
 ```
 
-Even though our data is not normal, the Kalman filter is still a consistent and unbiased estimator of the underlying factor, though with non-normal data it is less efficient. We will show this in the next section though a simulation.
+
