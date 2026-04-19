@@ -1,12 +1,12 @@
 ---
-title: "Estimating latent factors: the Kalman filter"
+title: "Estimating latent factors in dynamic models: the Kalman filter"
 author: "Francesco Zucca, Michael Fehl"
 format: pdf
 execute:
   echo: false
   warning: false
   message: false
-references: references.bib
+bibliography: references.bib
 ---
 
 # Abstract
@@ -454,7 +454,7 @@ p_qq <- ggplot(plot_data, aes(sample = Value_Scaled)) +
   facet_wrap(~Indicator) +
   theme_minimal() +
   labs(title = "Normal Q-Q Plot for Macro Indicators",
-       subtitle = "Points deviating from the red line indicate non-Gaussian 'fat tails'"
+       subtitle = "Points deviating from the red line indicate non-Gaussian 'fat tails'")
 
 print(p_qq)
 
@@ -513,4 +513,4 @@ tetrad_tibble <- as_tibble(tetrad_results, rownames = "Lag")
 knitr::kable(tetrad_tibble, digits = 4, caption = "Empirical Dynamic Tetrad Constraints")
 ```
 
-
+# Bibliography
