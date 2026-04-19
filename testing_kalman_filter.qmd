@@ -19,28 +19,22 @@ Finally, we will expand the number of indicators included in the model by incorp
 
 ## 1. The Stock & Watson model
 
-First, we test the model proposed by Stock and Watson. The vector of indicators we will be using is the following:
-
-$$y_t = \begin{bmatrix} y_{1t} \\ y_{2t} \\ y_{3t} \\ y_{4t} \end{bmatrix}$$
-
-where each one of the macroeconomic indicators is represented in log-differences to capture growth rates, and is standardized to adjust for the scale.
-
-The factor we want to extract is the scalar $f_t$, which follows an AR(2) process. The complete model is therefore given by:
+We first replicate model proposed by Stock and Watson. Their model assumes that the comovements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. Formally, the model is represented by the following structural equations:
 
 -   The measurement equation: $y_t = \lambda f_{t} + e_{t}$
--   The transition equation: $f_{t} = \phi f_{t-1} + w_{t}$
+-   The factor transition equation: $f_{t} = \phi_{1}f_{t-1} + \phi_{2}f_{t-2} + w_{t}, \quad w_{t} \sim i.i.d. N(0,1)$
+-   The error transition equation: $e_{t} = \psi_{1}e_{t-1} + \psi_{2}e_{t-2} + \epsilon_{t}, \quad \epsilon_{t} \sim i.i.d. N(0, \sigma_{i}^{2})$
 
-with:
+Where:
 
-$$f_{t} = \phi_{1}f_{t-1} + \phi_{2}f_{t-2} + w_{t}, \quad w_{t} \sim i.i.d. N(0,1)$$
+-   $y_t$ is the $(4 \times 1)$ vector of normalized log-differences of the indicators at time $t$
+-   $\lambda$ is the $(4 \times 1)$ vector of coefficients
+-   $f_t$ is the $(1 \times 1)$ factor scalar at time $t$
+-   $e_t$ is the $(4 \times 1)$ vector of errors at time $t$
 
-$$e_{it} = \psi_{i1}e_{i,t-1} + \psi_{i2}e_{i,t-2} + \epsilon_{it}, \quad \epsilon_{it} \sim i.i.d. N(0, \sigma_{i}^{2})$$
+Noticeably, to capture the cyclic patter of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the following graphical model:
 
 ![](images/clipboard-3627855944.jpeg)
-
-The Kalman filter requires errors $e_t$ to be white noise normal. Given that the errors are not white noise, but follow an AR(2) process, they are incorporated into the state vector of the Kalman filter so that the filter's transition matrix is able to track the autocorrelated memory of the error.
-
-**add graphical model**
 
 ```{r}
 ### LIBRARIES
@@ -122,7 +116,15 @@ n <- ncol(y) # number of indicators
 varQ <- 1
 ```
 
-### 1.2. Extracting the factor
+### 1.2. Latent factor estimation
+
+Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is given by the Kalman filter [@kalman1960]. However, this estimation technique requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the S&W model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor.
+
+The Kalman filter requires errors $e_t$ to be white noise normal. Given that the errors are not white noise, but follow an AR(2) process, they are incorporated into the state vector of the Kalman filter so that the filter's transition matrix is able to track the autocorrelated memory of the error.
+
+**add graphical model**
+
+### 
 
 To extract the factor we run the Kalman filter.
 
