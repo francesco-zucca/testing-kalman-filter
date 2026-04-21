@@ -5,3 +5,8 @@
 
 # Mac files
 .DS_Store
+
+# FRED data
+.rds
+.xls
+.xlsx
