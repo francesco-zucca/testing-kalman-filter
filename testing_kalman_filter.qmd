@@ -45,7 +45,7 @@ library("tidyquant")
 
 ### LOADING DATA
 
-# IDs
+# FRED IDs:
 ids <- c(
   "GDPC1",     # Real GDP
   "INDPRO",    # Industrial Production
@@ -63,13 +63,15 @@ if (file.exists(data_file)) {
   raw_data <- read_rds(data_file)
 } else {
   # If no, download from FRED and save it for future renders
-  raw_data <- tq_get(ids, get = "economic.data", from = "1969-10-01", to = "2026-01-01")
+  raw_data <- tq_get(ids, get = "economic.data",
+                     from = "1969-10-01", to = "2026-01-01")
   write_rds(raw_data, data_file)
 }
 
 # Pivoting data in wide format
 data_monthly <- raw_data %>%
-  pivot_wider(names_from = symbol, values_from = price) %>%
+  pivot_wider(names_from = symbol, 
+              values_from = price) %>%
   arrange(date)
 
 # Aligning the GDP measurement
@@ -132,14 +134,14 @@ After estimating the latent factor via the Kalman filter, we must rescale it to 
 ```{r}
 ### MATRIX FUNCTION ###
 
-# Function that obtains matrices given the input parameter vector th
-# Note that th is the vector of parameters which likelihood will be maximized by the maximum likelihood function
+# Function that obtains matrices given the input parameter vector 'th'
+# Note that 'th' is the vector of parameters which likelihood will be maximized by the maximum likelihood function
 # the ML function
 matrices <- function(th, n, varQ) {
   
   ### H: measurement matrix
   
-  # Manually defined matrix h1 (used to extract the errors from the h vector)
+  # Manually defined matrix 'h1' (used to extract the errors from the h vector)
   h1 <- rbind(
     c(1, 0, 0, 0, 0, 0, 0, 0),
     c(0, 0, 1, 0, 0, 0, 0, 0),
@@ -512,5 +514,118 @@ tetrad_tibble <- as_tibble(tetrad_results, rownames = "Lag")
 # Print the beautiful new tibble
 knitr::kable(tetrad_tibble, digits = 4, caption = "Empirical Dynamic Tetrad Constraints")
 ```
+
+
+# 2. Breaking Gaussianity
+
+Motivation: breaking the assumption of normally distributed observable data, assigning them 2-3 different distribution functions:
+
+to sim data, we need:
+
+- std. normal data
+- student-t data
+- skew-t data
+
+see what happens as we increase n from 10-100-1000-10000, etc
+
+## 2.1 Gaussian Distribution
+
+```{r}
+mean_W875 <-   mean(df_clean$W875RX1)
+mean_indp <-   mean(df_clean$INDPRO)
+mean_cmrm <-   mean(df_clean$CMRMTSPL)
+mean_payems <- mean(df_clean$PAYEMS)
+
+sd_W875 <-   sd(df_clean$W875RX1)
+sd_indp <-   sd(df_clean$INDPRO)
+sd_cmrm <-   sd(df_clean$CMRMTSPL)
+sd_payems <- sd(df_clean$PAYEMS)
+
+```
+
+
+```{r}
+set.seed(123)
+TT <- 100000
+
+# 1. generate fake factor
+f_true <- numeric(TT)
+for (t in 3:TT)
+  f_true[t] <- 0.6*f_true[t-1] + 0.2*f_true[t-2] + rnorm(1)
+
+# factor loadings extracted from
+lambda <- opt_res$par[1:4]
+
+# force observables through 4 series using your estimated loadings
+Y_normal <- f_true %*% t(lambda) + matrix(rnorm(TT*4), TT, 4)
+
+# normalize
+Y_normal <- scale(Y_normal)
+
+# run kalman
+final_sim <- kalman(opt_res$par, Y_normal, n = 4, TT = nrow(Y_normal), varQ)
+f_hat <- final_sim$filter_mat[, 1]
+
+# check recovery
+cat("Factor recovery correlation:", cor(f_hat, f_true), "\n")
+```
+
+
+## 2.2 Student-t Distribution
+
+```{r student-t data}
+
+n = 800
+# standardized so variance = 1 
+rt(n, df = 5) / sqrt(5 / (5 - 2))
+```
+
+
+## 2.3 Skewed-Elliptical
+
+```{r skew-t}
+library(sn)
+rst(n, xi=0, omega=1,  # alpha controls skew (positive <==> skews right)
+    alpha=5, nu=5) 
+
+?rt
+?replicate
+?sapply
+vignette("sn")  # for the skew-t package
+```
+
+1. student-t (realistic given the finite-sample nature of data)
+2. skewed-elliptical
+3. skewed-symmetric
+
+
+show that results are unbiased (should be roughly the same across all distributions) but NOT efficient (show variance-covariance matrix, explain why)
+
+
+# 3. Two-Factor Model 
+
+motivation: want to improve performance (increase R^2 from 75%)
+
+what happens when we generate a second latent variable by including more macro variables in the model? (I.e., we add in financial variables and generate financial latent factor) and we try to run S&W under the one-factor assumption? Should be biased, breaks; we try to recover the second latent factor with some sort of dynamic parallel analysis.
+
+tdl:
+- find vars to generate second variable
+- build new model using vars, run thru kalman filter
+- compare to results from part 1.1, show that it is biased
+- explain why this is
+- try to extract second latent factor using parallel analysis, need to show this in section 1 before Kalman filters
+
+## 3.1 Introducing More Variables
+
+
+
+## 3.2 Estimated Using Stock & Watson
+
+
+
+## 3.3 Parallel Analysis
+
+
+
 
 # Bibliography
