@@ -1133,9 +1133,12 @@ if (file.exists(data_file)) {
 } else {
   # If no, download from FRED and save it for future renders
   raw_data <- tq_get(ids, get = "economic.data",
-                     from = "1969-10-01", to = "2025-09-01")
+                     from = "1969-10-01", to = "2025-01-01")
   write_rds(raw_data, data_file)
 }
+
+raw_data <- raw_data %>%
+  mutate(date = floor_date(date, "month"))  # snap all dates to 1st of month
 
 # Pivoting data in wide format
 data_monthly <- raw_data %>%
@@ -1387,7 +1390,7 @@ factorQ <- (1/3) * factor[5:length(factor)] +
 # Extracting every 3rd month to match quarterly GDP
 i <- 1
 factgdp <- c()
-while(i < (TT - 4)) {
+while(i <= (TT - 4)) {
   factgdp <- c(factgdp, factorQ[i])
   i <- i + 3
 }
@@ -1497,6 +1500,130 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
     plot.title = element_text(face = "bold", size = 14),
     plot.subtitle = element_text(color = "darkgrey", size = 11)
   )
+```
+
+```{r}
+### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
+
+library(psych)
+
+# Extracting the estimated coefficient
+th <- opt_res$par
+
+# Extracting the idiosyncratic AR(2) coefficients for each indicator
+psi_hat <- matrix(th[(n + 3):(n + 18)], nrow = n, ncol = 2, byrow = TRUE)
+
+# Extracting the variance for each indicator
+sigma_hat  <- th[(n + 19):(n + 26)]
+sigma2_hat <- sigma_hat^2
+
+# COMPUTING THE EIGENVALUES OF THE FRED DATA
+
+# Correlation matrix of the actual data
+R_obs <- cor(y)
+
+# Extracting the eigenvalues
+eig_obs <- eigen(R_obs)$values
+
+# AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
+
+# Defining the simulation function
+ar2_null <- function(TT, n, psi, sigma2) {
+  
+  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
+  # the stationary part of the process
+  burnin <- 50
+  TT_total <- TT + burnin
+  
+  # Simulate AR(2) errors
+  
+  # Placeholder matrix
+  U <- matrix(0, nrow = TT_total, ncol = n)
+  
+  # For loop to generate the errors with the estimated standard deviations
+  for (i in 1:n) {
+    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
+    
+    # For loop to generate the matrix of the simulated indicators without the factor
+    for (t in 3:TT_total) {
+      U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
+    }
+  }
+  
+  # Discarding the burn-in and rescaling
+  y_gen <- U[(burnin + 1):TT_total, ]
+  y_gen <- scale(y_gen)
+  return(y_gen)
+}
+
+# MONTE CARLO SIMULATION
+
+# Defining the number of simulations
+n_sim <- 500
+
+# Starting the matrix for the simulated eigenvalues (each row is the eigenvalues for one simulation)
+eig_sim_mat <- matrix(NA, nrow = n_sim, ncol = n)
+
+# Running the simulation
+set.seed(42)
+for (s in 1:n_sim) {
+  y_sim <- ar2_null(TT, n, psi_hat, sigma2_hat)
+  eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
+}
+
+# Mean eigenvalues across simulations at each rank
+eig_sim <- colMeans(eig_sim_mat)
+
+# Determining the number of factors
+n_factors <- sum(eig_obs > eig_sim)
+cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
+
+# Plotting
+plot_pa <- tibble(
+  Index     = 1:n,
+  Observed  = eig_obs,
+  Benchmark = eig_sim
+) %>%
+  pivot_longer(cols = c(Observed, Benchmark), 
+               names_to = "Series", values_to = "Eigenvalue")
+
+ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
+                    color = Series, linetype = Series, shape = Series)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = n_factors + 0.5, 
+             linetype = "dotted", color = "grey40") +
+  scale_color_manual(values = c("Observed" = "steelblue", 
+                                "Benchmark" = "red3")) +
+  scale_linetype_manual(values = c("Observed" = "solid", 
+                                   "Benchmark" = "dashed")) +
+  scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
+  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
+           label = "keep", color = "grey40", size = 3.5) +
+  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
+           label = "discard", color = "grey40", size = 3.5) +
+  labs(
+    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
+    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
+                       n_factors),
+    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
+    linetype = NULL, shape = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold", size = 13))
+```
+
+```{r}
+th_hat <- opt_res$par
+
+# Compare estimated sigma2 across real vs price indicators
+sigma_hat <- th_hat[(n + 19):(n + 26)]
+tibble(
+  Indicator = colnames(y),
+  Group     = c(rep("Real", 4), rep("Price", 4)),
+  Sigma     = sigma_hat
+)
 ```
 
 ## 3.2 Estimated Using Stock & Watson
