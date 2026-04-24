@@ -127,7 +127,7 @@ Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be
 
 Where $h_{t}$ is the state vector which now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error.
 
-## 1.2. Mapping the latent factor to GDP growth
+## 1.2. Mapping the latent factor to GDP growth {#kalman-filter}
 
 After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
@@ -518,89 +518,456 @@ knitr::kable(tetrad_tibble, digits = 4, caption = "Empirical Dynamic Tetrad Cons
 
 # 2. Breaking Gaussianity
 
-Motivation: breaking the assumption of normally distributed observable data, assigning them 2-3 different distribution functions:
+The Kalman filter is derived under the assumption that all structural shocks follow a Gaussian distribution, which grants it the property of being the minimum variance unbiased estimator of the latent factor. When this assumption is violated, the filter estimated via Gaussian quasi-maximum likelihood remains consistent, meaning the estimated parameters still converge to their true values as $T \rightarrow \infty$, but **loses efficiency in finite samples**.
 
-to sim data, we need:
+The reason for this is that under a misspecified likelihood, the Kalman gain is no longer optimal; therefore, the filter requires more observations to achieve the same precision as it would under correctly specified Gaussian shocks. This efficiency loss is particularly relevant for macroeconomic data, which with fewer than 800 observations can never be confidently characterized as truly Gaussian, and empirically exhibits heavy tailed behavior consistent with a student-t distribution [@geweke1993]. We evaluate this by simulating the S&W data generating process under three distributional assumptions of increasing complexity: Gaussian, student-t, and skew-t, the latter of which introduces nonzero skewness via a slant parameter $\alpha \neq 0$.
 
-- std. normal data
-- student-t data
-- skew-t data
+## 2.1 Gaussian Distribution {#gaussian-dist}
 
-see what happens as we increase n from 10-100-1000-10000, etc
+To simulate Gaussian data into our Kalman filter, we generate a structured array of various sample sizes to evaluate how the estimator performs in finite samples and what happens to its performance as $T \rightarrow \infty$. 
 
-## 2.1 Gaussian Distribution
+For each sample size, we generate a true latent factor following an AR(2) process with coefficient values of $\hat{\phi}_1 = 0.293$ and $\hat{\phi}_2 = -0.098$, estimated from the S&W model in {@kalman-filter}, with Gaussian shocks by assumption. We then construct the observable data by multiplying the true factor by the estimated factor loadings from {@kalman-filter} and adding normally distributed idiosyncratic errors, replicating the structure of the S&W measurement equation. 
 
-```{r}
-mean_W875 <-   mean(df_clean$W875RX1)
-mean_indp <-   mean(df_clean$INDPRO)
-mean_cmrm <-   mean(df_clean$CMRMTSPL)
-mean_payems <- mean(df_clean$PAYEMS)
+The simulated observables are normalized and fed into the Kalman filter, and the correlation between the estimated factor $\hat{f}_t$ and the true factor $f_t$ is recorded across all sample sizes.
 
-sd_W875 <-   sd(df_clean$W875RX1)
-sd_indp <-   sd(df_clean$INDPRO)
-sd_cmrm <-   sd(df_clean$CMRMTSPL)
-sd_payems <- sd(df_clean$PAYEMS)
+```{r gaussian function}
+run_gaussian <- function(tt){
+  
+# 0. define factor coefficients
+phi1 <- opt_res$par[5]
+phi2 <- opt_res$par[6]
 
-```
-
-
-```{r}
-set.seed(123)
-TT <- 100000
-
-# 1. generate fake factor
-f_true <- numeric(TT)
-for (t in 3:TT)
-  f_true[t] <- 0.6*f_true[t-1] + 0.2*f_true[t-2] + rnorm(1)
-
-# factor loadings extracted from
+# 0. factor loadings extracted from S&W 
 lambda <- opt_res$par[1:4]
 
-# force observables through 4 series using your estimated loadings
-Y_normal <- f_true %*% t(lambda) + matrix(rnorm(TT*4), TT, 4)
+# 1. generate fake factor
+f_true <- numeric(tt)
+for (t in 3:tt)
+  f_true[t] <- phi1*f_true[t-1] + phi2*f_true[t-2] + rnorm(1)
+
+# force observables through 4 series using estimated loadings
+Y_normal <- f_true %*% t(lambda) + matrix(rnorm(tt*4), tt, 4)
 
 # normalize
 Y_normal <- scale(Y_normal)
 
 # run kalman
-final_sim <- kalman(opt_res$par, Y_normal, n = 4, TT = nrow(Y_normal), varQ)
+final_sim <- kalman(opt_res$par, 
+                    Y_normal, 
+                    n = 4, 
+                    TT = tt, 
+                    varQ)
+
 f_hat <- final_sim$filter_mat[, 1]
 
-# check recovery
-cat("Factor recovery correlation:", cor(f_hat, f_true), "\n")
+cor(f_hat, f_true)
+}
+```
+
+We first run a single iteration across sample sizes generated from `seq(10, 10000, by = 50)`, such that the lower bound captures realistic finite sample sizes representative of macroeconomic datasets, while the upper bound approaches the asymptotic nature of a dataset, where the property of consistency is expected to hold.
+
+```{r gaussian test run, eval=FALSE}
+# one iteration
+TT <- seq(10, 10000, by = 50)
+results1 <- data.frame(
+  sample_size = TT,
+  Gaussian = sapply(TT, function(tt) run_gaussian(tt))
+)
+```
+
+```{r save gaussian, echo=FALSE, eval=FALSE}
+# save sim results
+save(results1, file = "results/gaussian_results.RData")
 ```
 
 
-## 2.2 Student-t Distribution
+```{r gaussian plotting data, echo=FALSE}
+# load in data
+load(file = "results/gaussian_results.RData")
 
-```{r student-t data}
-
-n = 800
-# standardized so variance = 1 
-rt(n, df = 5) / sqrt(5 / (5 - 2))
+# pivot to long format for plotting
+results_long1 <- results1 %>%
+  pivot_longer(cols = c(Gaussian), 
+               names_to = "Distribution", 
+               values_to = "Correlation")
 ```
 
 
-## 2.3 Skewed-Elliptical
+```{r gaussian plot, echo=FALSE}
+#| label: fig-gaussian
+#| fig-cap: "Factor Recovery vs Sample Size under Gaussian Shocks"
 
-```{r skew-t}
+ggplot(results_long1, aes(x = sample_size, 
+                          y = Correlation, 
+                          color = Distribution)) +
+  geom_line(linewidth = 0.8) +
+  scale_y_continuous(limits = c(0.70, 0.85))+
+  scale_color_manual(values = c("Gaussian" = "dodgerblue3")) +
+  labs(title = "Factor Recovery vs Sample Size",
+       x = "Sample Size (TT)", y = "Mean Correlation", color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust=0.5),
+        plot.subtitle = element_text(hjust=0.5))
+```
+
+```{r save gaussian, eval=FALSE, echo=FALSE}
+# save plot image
+ggsave(filename = "images/gaussian_plot.png",
+       width=8, height=5, dpi=300)
+```
+
+
+```{r compute convergence value, echo=FALSE, eval=FALSE}
+# CHECK: what is the value converging to asymptotically?
+asymptotic_cor <- mean(replicate(50, run_gaussian(50000)))
+saveRDS(object = asymptotic_cor, 
+        file = "results/asymptotic_cor")
+```
+
+
+```{r load in convergence value, echo=FALSE}
+# load in value to reference in-line w/ text
+asymptotic_cor <- readRDS(file = 'results/asymptotic_cor')
+```
+
+We see from @fig-gaussian that factor recovery under Gaussian shocks is stable across all sample sizes, with correlation between the estimated and true factor converging to approximately `r asymptotic_cor` as $T$ grows. The relatively high recovery even at small sample sizes is consistent with the Kalman filter being the minimum variance estimator under correctly specified Gaussian shocks, confirming that no efficiency loss is present when the distributional assumption holds.
+
+## 2.2 Student-t Distribution {#student-t-dist}
+
+To break the assumption of Gaussianity, we simulate the S&W data generating process under a student-t distribution, which is well documented as a realistic characterization of finite sample macroeconomic data [@geweke1993].
+
+Theoretically, given the QMLE consistency result, we should expect the Kalman filter to remain consistent in its recovery of the latent factor, meaning the estimates converge to the true factor as $T \rightarrow \infty$. However, we expect to observe an efficiency loss in finite samples, as the Kalman gain is derived under the Gaussian likelihood and is therefore suboptimal when the true distribution has heavier tails [@white1982; @DurbinKoopman2012].
+
+```{r student_t function, echo=FALSE}
+run_student_t <- function(tt){
+  
+# 0. define factor coefficients
+phi1 <- opt_res$par[5]
+phi2 <- opt_res$par[6]
+  
+# 0. factor loadings extracted from S&W
+lambda <- opt_res$par[1:4]
+  
+# 1. generate fake factor
+f_true <- numeric(tt)
+for (t in 3:tt)
+  f_true[t] <- phi1*f_true[t-1] + phi2*f_true[t-2] + rt(1, df=5)/sqrt(5/3)
+
+# force observables through 4 series using estimated loadings
+Y_normal <- f_true %*% t(lambda) + matrix(rt(tt*4, df=5) / sqrt(5/3),
+                                          tt, 4)
+
+# normalize
+Y_normal <- scale(Y_normal)
+
+# run kalman
+final_sim <- kalman(opt_res$par, 
+                    Y_normal, 
+                    n = 4, 
+                    TT = nrow(Y_normal), 
+                    varQ)
+f_hat <- final_sim$filter_mat[, 1]
+
+# results
+cor(f_hat, f_true)
+}
+```
+
+
+```{r student_t test run, eval=FALSE}
+# one iteration
+TT <- seq(10, 10000, by = 50)
+results2 <- data.frame(
+  sample_size = TT,
+  Student_t = sapply(TT, function(tt) run_student_t(tt))
+)
+```
+
+```{r save student t, echo=FALSE, eval=FALSE}
+# save sim results
+save(results2, file = "results/student_t_results.RData")
+```
+
+```{r student_t plotting data, echo=FALSE}
+# load in data
+load(file = "results/student_t_results.RData")
+
+# format data to long for plotting
+results_long2 <- results2 %>%
+  pivot_longer(cols = c(Student_t), 
+               names_to = "Distribution", 
+               values_to = "Correlation")
+```
+
+
+```{r student_t plot, echo=FALSE}
+#| label: fig-student-t
+#| fig-cap: "Factor Recovery vs Sample Size under Student-t Shocks"
+
+# plot
+ggplot(results_long2, aes(x = sample_size, 
+                          y = Correlation, 
+                          color = Distribution)) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = c("Student_t" = "salmon")) +
+  scale_y_continuous(limits = c(0.7,0.85)) +
+  labs(title = "Factor Recovery vs Sample Size",
+       x = "Sample Size (TT)", y = "Mean Correlation", color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust=0.5),
+        plot.subtitle = element_text(hjust=0.5))
+```
+
+```{r save student-t, eval=FALSE, echo=FALSE}
+# save plot image
+ggsave(filename = "images/student_t_plot.png",
+       width=8, height=5, dpi=300)
+```
+
+As illustrated in @fig-student-t, the Kalman filter remains consistent under student-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with the Gaussian baseline from {@gaussian-dist}.
+
+However, the trajectory is notably more volatile across sample sizes, particularly in the finite sample realm where the correlation fluctuates significantly before stabilizing. This is consistent with the theoretical prediction that the Kalman filter loses efficiency under heavy tailed distributions, as the misspecified Gaussian likelihood produces a suboptimal Kalman gain that requires more observations to average out the influence of extreme draws. 
+
+In other words, the fat tails of the student-t distribution introduce large idiosyncratic shocks that the filter struggles to separate from the common factor signal at small $T$, resulting in noisier factor recovery relative to the Gaussian case.
+
+## 2.3 Skewed-Elliptical {#skew-t-dist}
+
+For a more complex distributional assumption, we simulate the S&W data generating process under a skew-t distribution, which extends the student-t by introducing asymmetry via a nonzero slant parameter $\alpha \neq 0$.
+
+Specifically, we set `alpha = 5` which induces a positive skew, meaning the distribution has a longer right tail relative to the symmetric student-t case. Note that our simulated factor shocks are generated as follows:
+
+```{r skew_t fake factor, eval=FALSE}
+# generate fake factor
+factor_shocks <- rst(tt, xi=0, omega=1, alpha=5, nu=5)
+factor_shocks <- factor_shocks - mean(factor_shocks)
+```
+
+The factor shocks are recentered by subtracting the sample mean, as the skew-t distribution has a nonzero mean when $\alpha \neq 0$, which would otherwise violate the zero mean assumption of the Kalman filter and introduce a systematic bias into the factor estimates.
+
+```{r skew_t function, echo=FALSE}
 library(sn)
-rst(n, xi=0, omega=1,  # alpha controls skew (positive <==> skews right)
-    alpha=5, nu=5) 
+set.seed(123)
 
-?rt
-?replicate
-?sapply
-vignette("sn")  # for the skew-t package
+run_skew_t <- function(tt){
+ 
+# 0. define factor coefficients
+phi1 <- opt_res$par[5]
+phi2 <- opt_res$par[6]
+  
+# 0. factor loadings extracted from S&W
+lambda <- opt_res$par[1:4]
+  
+# 1. generate fake factor
+factor_shocks <- rst(tt, xi=0, omega=1, alpha=5, nu=5)
+factor_shocks <- factor_shocks - mean(factor_shocks)
+
+f_true <- numeric(tt)
+for (t in 3:tt)
+  f_true[t] <- phi1*f_true[t-1] + phi2*f_true[t-2] + factor_shocks[t]
+
+# factor loadings extracted from
+lambda <- opt_res$par[1:4]
+
+# force observables through 4 series using your estimated loadings
+shocks <- rst(tt*4, xi=0, omega=1, alpha=5, nu=5)
+shocks <- shocks - mean(shocks)
+
+Y_normal <- f_true %*% t(lambda) + matrix(shocks, tt, 4)
+
+# normalize
+Y_normal <- scale(Y_normal)
+
+# run kalman
+final_sim <- kalman(opt_res$par, 
+                    Y_normal, 
+                    n = 4, 
+                    TT = nrow(Y_normal), 
+                    varQ)
+f_hat <- final_sim$filter_mat[, 1]
+
+cor(f_hat, f_true)
+}
 ```
 
-1. student-t (realistic given the finite-sample nature of data)
-2. skewed-elliptical
-3. skewed-symmetric
+```{r skew_t test run, eval=FALSE}
+# one iteration
+TT <- seq(10, 10000, by = 50)
+results3 <- data.frame(
+  sample_size = TT,
+  Skew_t = sapply(TT, function(tt) run_skew_t(tt))
+)
+```
+
+```{r save skew_t, echo=FALSE, eval=FALSE}
+# save sim results
+save(results3, file = "results/skew_t_results.RData")
+```
 
 
-show that results are unbiased (should be roughly the same across all distributions) but NOT efficient (show variance-covariance matrix, explain why)
+```{r skew_t load plotting data, echo=FALSE}
+# load in data
+load(file = "results/skew_t_results.RData")
 
+# check recovery
+results_long3 <- results3 %>%
+  pivot_longer(cols = c(Skew_t), 
+               names_to = "Distribution", 
+               values_to = "Correlation")
+```
+
+
+```{r skew_t plot, echo=FALSE}
+#| label: fig-skew-t
+#| fig-cap: "Factor Recovery vs Sample Size under Skew-t Shocks"
+
+# plot skew_t
+ggplot(results_long3, aes(x = sample_size, 
+                          y = Correlation, 
+                          color = Distribution)) +
+  geom_line(linewidth = 0.8) +
+  scale_y_continuous(limits = c(0.7,0.85)) +
+  scale_color_manual(values = c("Skew_t" = "gold1")) +
+  labs(title = "Factor Recovery vs Sample Size",
+       x = "Sample Size (TT)", y = "Mean Correlation", color = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust=0.5),
+        plot.subtitle = element_text(hjust=0.5))
+```
+
+
+```{r save skew-t, eval=FALSE, echo=FALSE}
+# save plot object
+ggsave(filename= "images/skew_t_plot.png",
+       width=8, height=5, dpi=300)
+```
+
+Indeed, from our results in @fig-skew-t we see that the Kalman filter remains consistent under skew-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with both the Gaussian and student-t baselines. This confirms the QMLE consistency result, as the estimator recovers the true latent factor regardless of the distributional assumption placed on the shocks. 
+
+However, the trajectory is notably more volatile relative to both the Gaussian and student-t cases, with correlation fluctuating between 0.75 and 0.85 even at large sample sizes. This persistent volatility reflects the additional efficiency cost introduced by the nonzero skewness of the shock distribution, as the positive slant parameter $\alpha = 5$ generates asymmetric extreme draws that the Kalman filter, operating under a misspecified Gaussian likelihood, struggles to average out even at large $T$.
+
+## 2.4 Monte Carlo Simulation
+
+```{r mc sim, eval=FALSE}
+####################################################################
+## DO NOT RUN! Will take hours to complete, objects already saved ##
+####################################################################
+
+# run simulation 50 times, take the average 
+TT <- seq(10, 10000, by = 50)
+
+# gaussian
+results1 <- data.frame(
+  sample_size = TT,
+  Gaussian = sapply(TT, function(tt) mean(replicate(50, run_gaussian(tt))))
+)
+
+# student-t
+results2 <- data.frame(
+  sample_size = TT,
+  Student_t = sapply(TT, function(tt) mean(replicate(50, run_student_t(tt))))
+)
+
+# skew-t
+results3 <- data.frame(
+  sample_size = TT,
+  Skew_t = sapply(TT, function(tt) mean(replicate(50, run_skew_t(tt))))
+)
+
+save(results1, results2, results3, file = "mc_results.RData")
+```
+
+```{r load mc plotting data, echo=FALSE}
+# load 50 MC sim results
+load("results/mc_results.RData")
+
+# join dfs and reformat for plotting
+results_all <- inner_join(results1, results2, by = "sample_size") %>% 
+  inner_join(., results3, by = "sample_size")
+
+results_long_all <- results_all %>%
+  pivot_longer(cols = c(Gaussian, Student_t, Skew_t), 
+               names_to = "Distribution", 
+               values_to = "Correlation")
+```
+
+
+```{r mc results plot, echo=FALSE}
+#| label: fig-mc-results
+#| fig-cap: "Factor Recovery vs Sample Size, Averaged Across 50 MC Simulation"
+
+# all plotted tg
+ggplot(data= results_long_all,
+       aes(x = sample_size, 
+           y = Correlation, 
+           color = Distribution,
+           linetype=Distribution)) +
+  geom_line(linewidth=0.8) +
+  scale_x_continuous(limits = c(10,10000))+
+  scale_y_continuous(limits = c(0.78, 0.82))+
+  scale_color_manual(values = c("Gaussian" = "dodgerblue2",
+                                "Student_t" = "salmon",
+                                "Skew_t" = "gold1")) +
+  labs(title = "Factor Recovery vs Sample Size",
+       subtitle = "Mean correlation over 50 replications",
+       x = "Sample Size (TT)", y = "Mean Correlation", color = NULL) +
+  theme_minimal() +
+  guides(color = guide_legend("Distribution"), 
+       linetype = guide_legend("Distribution")) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust=0.5),
+        plot.subtitle = element_text(hjust=0.5))
+```
+
+
+```{r save mc plot, echo=FALSE, eval=FALSE}
+# save plot object
+ggsave(filename = "images/mc_results_50_plot.png",
+       width = 8, height = 5, dpi = 300)
+```
+
+As illustrated in @fig-mc-results, the three distributions converge to the same asymptotic factor recovery correlation of approximately r asymptotic_cor as $T \rightarrow \infty$, directly confirming the QMLE consistency result. At small sample sizes, all three distributions exhibit greater volatility and slightly lower recovery, with the skew-t and student-t lines deviating more from the Gaussian baseline, consistent with the theoretical prediction of finite sample efficiency loss under non-Gaussianity. 
+
+Notably, by approximately $T=500$, the three lines become largely indistinguishable, suggesting that the efficiency cost of distributional misspecification is negligible beyond sample sizes that are well within the range of typical macroeconomic datasets. This is a reassuring result for applied work, as it implies that the Kalman filter estimated via Gaussian quasi-maximum likelihood remains a reliable estimator of the latent business cycle factor even when the true shock distribution exhibits heavy tails or asymmetry.
+
+## 2.5 Efficency Loss under Non-Gaussian Data
+
+```{r variable table, results='hide'}
+# run 200 replications, store all correlations
+n_reps <- 200
+TT_fixed <- 675  # actual sample size from FRED data
+
+cors_gaussian <- replicate(n_reps, run_gaussian(TT_fixed))
+cors_student  <- replicate(n_reps, run_student_t(TT_fixed))
+cors_skewt    <- replicate(n_reps, run_skew_t(TT_fixed))
+
+# variance of factor recovery across replications
+var_table <- data.frame(
+  Distribution = c("Gaussian", "Student-t", "Skew-t"),
+  Mean         = c(mean(cors_gaussian), mean(cors_student), mean(cors_skewt)),
+  Variance     = c(var(cors_gaussian),  var(cors_student),  var(cors_skewt)),
+  SD           = c(sd(cors_gaussian),   sd(cors_student),   sd(cors_skewt))
+)
+```
+
+
+```{r variance table results, echo=FALSE}
+#| label: tbl-variance
+#| tbl-cap: "Factor Recovery: Mean and Variance across 200 Replications"
+
+knitr::kable(var_table, digits = 6, 
+             caption = "Factor Recovery: Mean and Variance across 200 Replications") %>% 
+  kableExtra::kable_styling()
+
+```
+
+To formally demonstrate the efficiency loss under non-Gaussian distributions, we run 200 replications of the Monte Carlo simulation at the empirical sample size of $T = 800$, corresponding to the number of observations in our FRED dataset, and compute the variance of factor recovery across replications. 
+
+As reported in @tbl-variance, the Gaussian estimator achieves the lowest variance of $0.000208$, confirming its optimality under correctly specified shocks. The student-t estimator exhibits a variance of $0.000430$, roughly twice that of the Gaussian case, while the skew-t estimator yields the highest variance of $0.000718$, approximately 3.5 times the Gaussian baseline. Importantly, the mean recovery is nearly identical across all three distributions at approximately $0.794$, confirming that the estimator remains consistent regardless of the distributional assumption. 
+
+Together, these results provide formal evidence of the consistency without efficiency property of the Gaussian quasi-maximum likelihood Kalman filter: the estimator converges to the correct value under all three distributions, but requires significantly more observations to do so with the same precision when shocks are non-Gaussian.
 
 # 3. Two-Factor Model 
 
