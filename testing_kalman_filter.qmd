@@ -1450,6 +1450,15 @@ yhat2 <- b[1] + b[2] * factgdp2[length(factgdp2)]
 ```
 
 ```{r}
+lambda_hat <- opt_res$par[1:n]
+tibble(
+  Indicator = colnames(y),
+  Group     = c(rep("Real", 4), rep("Price", 4)),
+  Lambda    = lambda_hat
+)
+```
+
+```{r}
 ### IN-SAMPLE ESTIMATES OF GDP AND PERFORMANCE MEASURES ###
 
 # Translating all historical factors into estimated GDP 
@@ -1612,6 +1621,16 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
   theme_minimal() +
   theme(legend.position = "bottom",
         plot.title = element_text(face = "bold", size = 13))
+```
+
+```{r}
+# Extracting factor loadings
+lambda_hat <- opt_res$par[1:n]
+tibble(
+  Indicator = colnames(y),
+  Group     = c(rep("Real", 4), rep("Price", 4)),
+  Lambda    = lambda_hat
+)
 ```
 
 ```{r}
