@@ -487,7 +487,7 @@ print(p_qq)
 
 Despite the violation of the normality assumption, the Kalman filter extracts a consistent estimate of the latent factor. Indeed, when the parameters are estimated via Gaussian quasi-maximum likelihood, consistency of the parameter estimates is preserved under non-Gaussianity, though with loss of efficiency in finite samples as the distribution moves away from Gaussianity and gets increasingly elliptical [@white1982]. Chapter 2 will be dedicated to an empirical demonstration of the robustness of the Kalman filter, by simulating the economic model proposed by S&W under increasingly elliptical distributions.
 
-## 1.4 Verifying that there is only one underlying factor (TO FINISH)
+## 1.4 Verifying that there is only one underlying factor
 
 One way to check the number of factors present in a model is by using parallel analysis. Nowcasting papers mainly use the criterion suggested by Bai and Ng, however, that criterion is consistent only for $T,N \rightarrow \infty$, and still refers to static factor models, even if it is often used to check for the number of factors in dynamic models.
 
@@ -562,7 +562,7 @@ for (s in 1:n_sim) {
   eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
 }
 
-# Mean eigenvalue across simulations at each rank
+# Mean eigenvalues across simulations at each rank
 eig_sim <- colMeans(eig_sim_mat)
 
 # Determining the number of factors
@@ -1087,6 +1087,105 @@ what happens when we generate a second latent variable by including more macro v
 tdl: - find vars to generate second variable - build new model using vars, run thru kalman filter - compare to results from part 1.1, show that it is biased - explain why this is - try to extract second latent factor using parallel analysis, need to show this in section 1 before Kalman filters
 
 ## 3.1 Introducing More Variables
+
+We will now introduce more variables from the price side of the economy, instead that from the real side.
+
+```{r}
+### LIBRARIES
+
+library("tidyverse")
+library("readxl")
+library("tidyquant")
+
+### LOADING DATA
+
+# FRED IDs
+
+# GDP
+gdp_id <- "GDPC1"
+
+# Real economy
+real_ids <- c(
+  "INDPRO",   # Industrial Production
+  "CMRMTSPL", # Manufacturing & Trade Sales
+  "PAYEMS",   # Nonfarm Payrolls
+  "W875RX1"   # Real Personal Income less Transfers 
+)
+
+# Prices
+price_ids <- c(
+  "CPIAUCSL", # CPI all items
+  "CPILFESL", # Core CPI
+  "PCEPI",    # PCE Price Index
+  "PPIACO"    # PPI all commodities
+)
+
+# All ids
+ids <- c(gdp_id, real_ids, price_ids)
+
+# Defining path for local data cache (for rendering)
+data_file <- "fred_macro_data2.rds"
+
+# Checking if data is already downloaded
+if (file.exists(data_file)) {
+  # If yes, load it locally (bypassing FRED API)
+  raw_data <- read_rds(data_file)
+} else {
+  # If no, download from FRED and save it for future renders
+  raw_data <- tq_get(ids, get = "economic.data",
+                     from = "1969-10-01", to = "2026-01-01")
+  write_rds(raw_data, data_file)
+}
+
+# Pivoting data in wide format
+data_monthly <- raw_data %>%
+  pivot_wider(names_from = symbol, 
+              values_from = price) %>%
+  arrange(date)
+
+# Aligning the GDP measurement
+df_aligned <- data_monthly %>%
+  arrange(date) %>%
+  mutate(GDPC1 = lag(GDPC1, 2))
+
+# Applying log differences to obtain the final dataset
+df_clean <- df_aligned %>%
+  arrange(date) %>%
+  mutate(
+    # Log-difference for the monthly variables (lag = 1)
+    across(all_of(c(real_ids, price_ids)), 
+           ~ (log(.x) - log(lag(.x, 1))) * 100),
+    
+    # Log-difference for the quarterly GDP (lag = 3)
+    GDPC1 = (log(GDPC1) - log(lag(GDPC1, 3))) * 100
+  ) %>%
+  # Dropping the very first row since month-over-month lag creates an NA
+  drop_na(PAYEMS)
+
+### DEFINING THE DATA ###
+
+# gdp data
+gdp <- df_clean %>%
+  select(GDPC1) %>%
+  drop_na(GDPC1) %>%
+  as.matrix()
+
+# Matrix of indicators
+y_raw <- df_clean %>%
+  select(- date, - GDPC1) %>%
+  as.matrix()
+
+### NORMALIZING DATA ###
+
+# demeaning the y time series and standardizing it
+y <- scale(y_raw)
+
+TT <- nrow(y) # number of observations
+n <- ncol(y) # number of indicators
+
+# normalizing the variance of w to 1
+varQ <- 1
+```
 
 ## 3.2 Estimated Using Stock & Watson
 
