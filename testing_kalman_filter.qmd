@@ -457,9 +457,9 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
 
 The empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.7595$ ). Moreover, the model yields an in-sample MSE of 0.277, translating to a Root Mean Squared Error (RMSE) of roughly 0.526 percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
 
-## 1.3. The normality assumption 
+## 1.3. The normality assumption
 
-The dynamic factor model proposed by Stock and Watson explicitly assumes that all structural shocks are purely Gaussian. However, economic cycles frequently feature sudden and massive shocks (e.g. the COVID-19 crisis), hence macroeconomic indicators are rarely normally distributed. Instead, they tend to exhibit heavy-tailed behavior. As illustrated in the  Quantile-Quantile (Q-Q) plot below, the distribution of our indicators indeed deviates from normality, confirming the presence of fat tails.
+The dynamic factor model proposed by Stock and Watson explicitly assumes that all structural shocks are purely Gaussian. However, economic cycles frequently feature sudden and massive shocks (e.g. the COVID-19 crisis), hence macroeconomic indicators are rarely normally distributed. Instead, they tend to exhibit heavy-tailed behavior. As illustrated in the Quantile-Quantile (Q-Q) plot below, the distribution of our indicators indeed deviates from normality, confirming the presence of fat tails.
 
 ```{r}
 ### CHECKING NORMALITY ASSUMPTION ###
@@ -489,55 +489,121 @@ Despite the violation of the normality assumption, the Kalman filter extracts a 
 
 ## 1.4 Verifying that there is only one underlying factor (TO FINISH)
 
-However, from our class we know that tetrad constraints to verify that there is only one underlying factor still hold under more elliptical distributions. Note, however, that tetrad constraints cannot be identified in a static way anymore, because the one factor model is dynamic. However, we can still verify them on the autocovariance structure (expand the explanation).
+One way to check the number of factors present in a model is by using parallel analysis. Nowcasting papers mainly use the criterion suggested by Bai and Ng, however, that criterion is consistent only for $T,N \rightarrow \infty$, and still refers to static factor models, even if it is often used to check for the number of factors in dynamic models.
+
+Therefore, we will use parallel analysis, which consist in comparing the magnitude of eigenvalues of the autocovariance matrix in the model with one factor, with a monte carlo simulation of the eigenvalues in the autocovariance matrix in a model with just the idiosyncratic error component. Since this is usually applied to static models, the idiosyncratic component is usually just white noise. In our case it will be instead follow an AR(2) with the parameters estimated via the Kalman filter.
 
 ```{r}
-### DYNAMIC TETRAD CONSTRAINTS ###
+### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
 
-# Function to compute empirical cross-covariance matrix at lag tau
-cross_cov_matrix <- function(y, tau) {
-  TT <- nrow(y)
-  # y_t is from tau+1 to TT
-  y_t <- y[(tau + 1):TT, ]
-  # y_lag is from 1 to TT-tau
-  y_lag <- y[1:(TT - tau), ]
+library(psych)
+
+# Extracting the estimated coefficient
+th <- opt_res$par
+
+# Extracting the idiosyncratic AR(2) coefficients for each indicator
+psi_hat <- matrix(th[(7):(14)], nrow = n, ncol = 2, byrow = TRUE)
+
+# Extracting the variance for each indicator
+sigma_hat <- th[(15):(18)]
+sigma2_hat <- sigma_hat^2
+
+# COMPUTING THE EIGENVALUES OF THE FRED DATA
+
+# Correlation matrix of the actual data
+R_obs <- cor(y)
+
+# Extracting the eigenvalues
+eig_obs <- eigen(R_obs)$values
+
+# AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
+
+# Defining the simulation function
+ar2_null <- function(TT, n, psi, sigma2) {
   
-  # Compute the covariance matrix between y_t and y_lag
-  cov_mat <- cov(y_t, y_lag)
-  return(cov_mat)
-}
-
-# Function to compute the three tetrads for a given covariance matrix
-compute_tetrads <- function(sigma) {
-  t1 <- sigma[1, 2] * sigma[3, 4] - sigma[1, 3] * sigma[2, 4]
-  t2 <- sigma[1, 2] * sigma[3, 4] - sigma[1, 4] * sigma[2, 3]
-  t3 <- sigma[1, 3] * sigma[2, 4] - sigma[1, 4] * sigma[2, 3]
+  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
+  # the stationary part of the process
+  burnin <- 50
+  TT_total <- TT + burnin
   
-  return(c(Tetrad_1 = t1, Tetrad_2 = t2, Tetrad_3 = t3))
+  # Simulate AR(2) errors
+  
+  # Placeholder matrix
+  U <- matrix(0, nrow = TT_total, ncol = n)
+  
+  # For loop to generate the errors with the estimated standard deviations
+  for (i in 1:n) {
+    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
+    
+    # For loop to generate the matrix of the simulated indicators without the factor
+    for (t in 3:TT_total) {
+      U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
+    }
+  }
+  
+  # Discarding the burn-in and rescaling
+  y_gen <- U[(burnin + 1):TT_total, ]
+  y_gen <- scale(y_gen)
+  return(y_gen)
 }
 
-# We want to check this for a few different lags (e.g., lags 1 through 5)
-max_lag <- 6
-tetrad_results <- matrix(NA, nrow = max_lag + 1, ncol = 3)
-colnames(tetrad_results) <- c("Tetrad 1", "Tetrad 2", "Tetrad 3")
-rownames(tetrad_results) <- paste("Lag", 0:max_lag)
+# MONTE CARLO SIMULATION
 
-# Loop through the lags, compute the cross-covariance, and extract tetrads
-for (tau in 1:max_lag) {
-  sigma_tau <- cross_cov_matrix(y, tau)
-  tetrad_results[tau + 1, ] <- compute_tetrads(sigma_tau)
+# Defining the number of simulations
+n_sim <- 500
+
+# Starting the matrix for the simulated eigenvalues (each row is the eigenvalues for one simulation)
+eig_sim_mat <- matrix(NA, nrow = n_sim, ncol = n)
+
+# Running the simulation
+set.seed(42)
+for (s in 1:n_sim) {
+  y_sim <- ar2_null(TT, n, psi_hat, sigma2_hat)
+  eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
 }
 
-sigma_0 <- cov(y)
-tetrad_results[1,] <- compute_tetrads(sigma_0)
+# Mean eigenvalue across simulations at each rank
+eig_sim <- colMeans(eig_sim_mat)
 
-# Convert the matrix to a tibble, moving row names into a new column called "Lag"
-tetrad_tibble <- as_tibble(tetrad_results, rownames = "Lag")
+# Determining the number of factors
+n_factors <- sum(eig_obs > eig_sim)
+cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
 
-# Print the beautiful new tibble
-knitr::kable(tetrad_tibble, digits = 4, caption = "Empirical Dynamic Tetrad Constraints")
+# Plotting
+plot_pa <- tibble(
+  Index     = 1:n,
+  Observed  = eig_obs,
+  Benchmark = eig_sim
+) %>%
+  pivot_longer(cols = c(Observed, Benchmark), 
+               names_to = "Series", values_to = "Eigenvalue")
+
+ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
+                    color = Series, linetype = Series, shape = Series)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = n_factors + 0.5, 
+             linetype = "dotted", color = "grey40") +
+  scale_color_manual(values = c("Observed" = "steelblue", 
+                                "Benchmark" = "red3")) +
+  scale_linetype_manual(values = c("Observed" = "solid", 
+                                   "Benchmark" = "dashed")) +
+  scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
+  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
+           label = "keep", color = "grey40", size = 3.5) +
+  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
+           label = "discard", color = "grey40", size = 3.5) +
+  labs(
+    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
+    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
+                       n_factors),
+    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
+    linetype = NULL, shape = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold", size = 13))
 ```
-
 
 # 2. Breaking Gaussianity
 
@@ -547,9 +613,9 @@ The reason for this is that under a misspecified likelihood, the Kalman gain is 
 
 ## 2.1 Gaussian Distribution {#gaussian-dist}
 
-To simulate Gaussian data into our Kalman filter, we generate a structured array of various sample sizes to evaluate how the estimator performs in finite samples and what happens to its performance as $T \rightarrow \infty$. 
+To simulate Gaussian data into our Kalman filter, we generate a structured array of various sample sizes to evaluate how the estimator performs in finite samples and what happens to its performance as $T \rightarrow \infty$.
 
-For each sample size, we generate a true latent factor following an AR(2) process with coefficient values of $\hat{\phi}_1 = 0.293$ and $\hat{\phi}_2 = -0.098$, estimated from the S&W model in @kalman-filter, with Gaussian shocks by assumption. We then construct the observable data by multiplying the true factor by the estimated factor loadings from @kalman-filter and adding normally distributed idiosyncratic errors, replicating the structure of the S&W measurement equation. 
+For each sample size, we generate a true latent factor following an AR(2) process with coefficient values of $\hat{\phi}_1 = 0.293$ and $\hat{\phi}_2 = -0.098$, estimated from the S&W model in @kalman-filter, with Gaussian shocks by assumption. We then construct the observable data by multiplying the true factor by the estimated factor loadings from @kalman-filter and adding normally distributed idiosyncratic errors, replicating the structure of the S&W measurement equation.
 
 The simulated observables are normalized and fed into the Kalman filter, and the correlation between the estimated factor $\hat{f}_t$ and the true factor $f_t$ is recorded across all sample sizes.
 
@@ -603,7 +669,6 @@ results1 <- data.frame(
 save(results1, file = "results/gaussian_results.RData")
 ```
 
-
 ```{r gaussian plotting data, echo=FALSE}
 # load in data
 load(file = "results/gaussian_results.RData")
@@ -622,12 +687,10 @@ saveRDS(object = asymptotic_cor,
         file = "results/asymptotic_cor")
 ```
 
-
 ```{r load in convergence value, echo=FALSE}
 # load in value to reference in-line w/ text
 asymptotic_cor <- round(readRDS(file = 'results/asymptotic_cor'),4)
 ```
-
 
 ```{r gaussian plot, echo=FALSE}
 #| label: fig-gaussian
@@ -703,7 +766,6 @@ cor(f_hat, f_true)
 }
 ```
 
-
 ```{r student_t test run, eval=FALSE}
 # one iteration
 TT <- seq(10, 10000, by = 50)
@@ -728,7 +790,6 @@ results_long2 <- results2 %>%
                names_to = "Distribution", 
                values_to = "Correlation")
 ```
-
 
 ```{r student_t plot, echo=FALSE}
 #| label: fig-student-t
@@ -764,7 +825,7 @@ ggsave(filename = "images/student_t_plot.png",
 
 As illustrated in @fig-student-t, the Kalman filter remains consistent under student-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with the Gaussian baseline from @gaussian-dist.
 
-However, the trajectory is notably more volatile across sample sizes, particularly in the finite sample realm where the correlation fluctuates significantly before stabilizing. This is consistent with the theoretical prediction that the Kalman filter loses efficiency under heavy tailed distributions, as the misspecified Gaussian likelihood produces a suboptimal Kalman gain that requires more observations to average out the influence of extreme draws. 
+However, the trajectory is notably more volatile across sample sizes, particularly in the finite sample realm where the correlation fluctuates significantly before stabilizing. This is consistent with the theoretical prediction that the Kalman filter loses efficiency under heavy tailed distributions, as the misspecified Gaussian likelihood produces a suboptimal Kalman gain that requires more observations to average out the influence of extreme draws.
 
 In other words, the fat tails of the student-t distribution introduce large idiosyncratic shocks that the filter struggles to separate from the common factor signal at small $T$, resulting in noisier factor recovery relative to the Gaussian case.
 
@@ -837,7 +898,6 @@ results3 <- data.frame(
 save(results3, file = "results/skew_t_results.RData")
 ```
 
-
 ```{r skew_t load plotting data, echo=FALSE}
 # load in data
 load(file = "results/skew_t_results.RData")
@@ -848,7 +908,6 @@ results_long3 <- results3 %>%
                names_to = "Distribution", 
                values_to = "Correlation")
 ```
-
 
 ```{r skew_t plot, echo=FALSE}
 #| label: fig-skew-t
@@ -876,14 +935,13 @@ ggplot(results_long3, aes(x = sample_size,
         plot.caption = element_text(hjust=0.5))
 ```
 
-
 ```{r save skew-t plot, eval=FALSE, echo=FALSE}
 # save plot object
 ggsave(filename= "images/skew_t_plot.png",
        width=8, height=5, dpi=300)
 ```
 
-Indeed, from our results in @fig-skew-t we see that the Kalman filter remains consistent under skew-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with both the Gaussian and student-t baselines. This confirms the QMLE consistency result, as the estimator recovers the true latent factor regardless of the distributional assumption placed on the shocks. 
+Indeed, from our results in @fig-skew-t we see that the Kalman filter remains consistent under skew-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with both the Gaussian and student-t baselines. This confirms the QMLE consistency result, as the estimator recovers the true latent factor regardless of the distributional assumption placed on the shocks.
 
 However, the trajectory is notably more volatile relative to both the Gaussian and student-t cases, with correlation fluctuating between 0.75 and 0.85 even at large sample sizes. This persistent volatility reflects the additional efficiency cost introduced by the nonzero skewness of the shock distribution, as the positive slant parameter $\alpha = 5$ generates asymmetric extreme draws that the Kalman filter, operating under a misspecified Gaussian likelihood, struggles to average out even at large $T$.
 
@@ -932,7 +990,6 @@ results_long_all <- results_all %>%
                values_to = "Correlation")
 ```
 
-
 ```{r mc results plot, echo=FALSE}
 #| label: fig-mc-results
 #| fig-cap: "Factor Recovery vs Sample Size, Averaged Across 50 MC Simulation"
@@ -966,14 +1023,13 @@ ggplot(data= results_long_all,
         plot.caption = element_text(hjust=0.5))
 ```
 
-
 ```{r save mc plot, echo=FALSE, eval=FALSE}
 # save plot object
 ggsave(filename = "images/mc_results_50_plot.png",
        width = 8, height = 5, dpi = 300)
 ```
 
-As illustrated in @fig-mc-results, the three distributions converge to the same asymptotic factor recovery correlation of approximately `r asymptotic_cor` as $T \rightarrow \infty$, directly confirming the QMLE consistency result. At small sample sizes, all three distributions exhibit greater volatility and slightly lower recovery, with the skew-t and student-t lines deviating more from the Gaussian baseline, consistent with the theoretical prediction of finite sample efficiency loss under non-Gaussianity. 
+As illustrated in @fig-mc-results, the three distributions converge to the same asymptotic factor recovery correlation of approximately `r asymptotic_cor` as $T \rightarrow \infty$, directly confirming the QMLE consistency result. At small sample sizes, all three distributions exhibit greater volatility and slightly lower recovery, with the skew-t and student-t lines deviating more from the Gaussian baseline, consistent with the theoretical prediction of finite sample efficiency loss under non-Gaussianity.
 
 Notably, both the student-t and skew-t distributions exhibit greater volatility relative to the Gaussian baseline, particularly at small sample sizes, with the skew-t remaining the most volatile throughout. It should be noted that the y-axis range is intentionally narrow to highlight these differences, and as reported in @tbl-variance, the absolute magnitude of the fluctuations is small in practice, with standard deviations of $0.021$ and $0.027$ for the student-t and skew-t, respectively. Nevertheless, all three distributions converge to the same asymptotic recovery value of `r asymptotic_cor`, confirming the QMLE consistency result regardless of the distributional assumption.
 
@@ -1002,7 +1058,6 @@ var_table <- data.frame(
 saveRDS(var_table, "results/var_table.rds")
 ```
 
-
 ```{r variance table results, echo=FALSE}
 #| label: tbl-variance
 #| tbl-cap: "Factor Recovery: Mean and Variance across 200 Replications"
@@ -1017,36 +1072,24 @@ knitr::kable(var_table, digits = 6,
 
 ```
 
-To formally demonstrate the efficiency loss under non-Gaussian distributions, we run 200 replications of the Monte Carlo simulation at the empirical sample size of $T = 675$, corresponding to the number of observations in our FRED dataset, and compute the variance of factor recovery across replications. 
+To formally demonstrate the efficiency loss under non-Gaussian distributions, we run 200 replications of the Monte Carlo simulation at the empirical sample size of $T = 675$, corresponding to the number of observations in our FRED dataset, and compute the variance of factor recovery across replications.
 
-As reported in @tbl-variance, the Gaussian estimator achieves the lowest variance of $0.000208$, confirming its optimality under correctly specified shocks. The student-t estimator exhibits a variance of $0.000430$, roughly twice that of the Gaussian case, while the skew-t estimator yields the highest variance of $0.000718$, approximately 3.5 times the Gaussian baseline. Importantly, the mean recovery is nearly identical across all three distributions at approximately $0.794$, confirming that the estimator remains consistent regardless of the distributional assumption. 
+As reported in @tbl-variance, the Gaussian estimator achieves the lowest variance of $0.000208$, confirming its optimality under correctly specified shocks. The student-t estimator exhibits a variance of $0.000430$, roughly twice that of the Gaussian case, while the skew-t estimator yields the highest variance of $0.000718$, approximately 3.5 times the Gaussian baseline. Importantly, the mean recovery is nearly identical across all three distributions at approximately $0.794$, confirming that the estimator remains consistent regardless of the distributional assumption.
 
 Together, these results provide formal evidence of the consistency without efficiency property of the Gaussian quasi-maximum likelihood Kalman filter: the estimator converges to the correct value under all three distributions, but requires significantly more observations to do so with the same precision when shocks are non-Gaussian.
 
-# 3. Two-Factor Model 
+# 3. Two-Factor Model
 
-motivation: want to improve performance (increase R^2 from 75%)
+motivation: want to improve performance (increase R\^2 from 75%)
 
 what happens when we generate a second latent variable by including more macro variables in the model? (I.e., we add in financial variables and generate financial latent factor) and we try to run S&W under the one-factor assumption? Should be biased, breaks; we try to recover the second latent factor with some sort of dynamic parallel analysis.
 
-tdl:
-- find vars to generate second variable
-- build new model using vars, run thru kalman filter
-- compare to results from part 1.1, show that it is biased
-- explain why this is
-- try to extract second latent factor using parallel analysis, need to show this in section 1 before Kalman filters
+tdl: - find vars to generate second variable - build new model using vars, run thru kalman filter - compare to results from part 1.1, show that it is biased - explain why this is - try to extract second latent factor using parallel analysis, need to show this in section 1 before Kalman filters
 
 ## 3.1 Introducing More Variables
 
-
-
 ## 3.2 Estimated Using Stock & Watson
 
-
-
 ## 3.3 Parallel Analysis
-
-
-
 
 # Bibliography
