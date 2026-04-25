@@ -1173,6 +1173,12 @@ gdp <- df_clean %>%
   drop_na(GDPC1) %>%
   as.matrix()
 
+# Inflation data
+inflation <- df_clean %>%
+  select(PCEPI) %>%
+  drop_na(PCEPI) %>%
+  as.matrix()
+
 # Matrix of indicators
 y_raw <- df_clean %>%
   select(- date, - GDPC1) %>%
@@ -1397,42 +1403,6 @@ while(i <= (TT - 4)) {
 ```
 
 ```{r}
-### FORECAST ###
-
-# Extracting the last row of the filter matrix (hT|T)
-hTT <- filter_mat[nrow(filter_mat), ]
-
-# Forecasting
-
-# Estimate the future factor values (just 5 quarters into the future)
-hT1T <- Fmat %*% hTT
-hT2T <- Fmat %*% hT1T
-hT3T <- Fmat %*% hT2T
-hT4T <- Fmat %*% hT3T
-hT5T <- Fmat %*% hT4T
-
-# Append the 5 new forecasted factors (1st element of each state vector) 
-# to the historical factor vector
-factor2 <- c(factor, hT1T[1], hT2T[1], hT3T[1], hT4T[1], hT5T[1])
-
-# Converting to quarterly growth rates
-factor2Q <- (1/3) * factor2[5:length(factor2)] + 
-  (2/3) * factor2[4:(length(factor2) - 1)] + 
-  factor2[3:(length(factor2) - 2)] + 
-  (2/3) * factor2[2:(length(factor2) - 3)] + 
-  (1/3) * factor2[1:(length(factor2) - 4)]
-
-# Downsampling to extract every 3rd month
-length <- length(factor2Q)
-i <- 1
-factgdp2 <- c()
-
-while(i <= length) {
-  fac1 <- factor2Q[i]
-  factgdp2 <- c(factgdp2, fac1)
-  i <- i + 3
-}
-
 # Estimating the GDP
 
 # Defining the data
@@ -1444,21 +1414,6 @@ x <- cbind(1, factgdp)
 # Computing the OLS coefficients
 b <- solve(t(x) %*% x) %*% t(x) %*% y_gdp
 
-# Generating the forecast, predicting the next two quarters
-yhat1 <- b[1] + b[2] * factgdp2[length(factgdp2) - 1]
-yhat2 <- b[1] + b[2] * factgdp2[length(factgdp2)]
-```
-
-```{r}
-lambda_hat <- opt_res$par[1:n]
-tibble(
-  Indicator = colnames(y),
-  Group     = c(rep("Real", 4), rep("Price", 4)),
-  Lambda    = lambda_hat
-)
-```
-
-```{r}
 ### IN-SAMPLE ESTIMATES OF GDP AND PERFORMANCE MEASURES ###
 
 # Translating all historical factors into estimated GDP 
@@ -1509,6 +1464,67 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
     plot.title = element_text(face = "bold", size = 14),
     plot.subtitle = element_text(color = "darkgrey", size = 11)
   )
+```
+
+```{r}
+### MAPPING TO INFLATION (OLS) ###
+
+# Target inflation series (held-out, e.g. PCEPI log-diff)
+y_inf <- inflation   # your held-out series as a matrix
+
+# OLS
+x <- cbind(1, factor)
+b <- solve(t(x) %*% x) %*% t(x) %*% y_inf
+
+### IN-SAMPLE PERFORMANCE ###
+inf_fitted <- x %*% b
+residuals  <- y_inf - inf_fitted
+mse        <- mean(residuals^2)
+ss_tot     <- sum((y_inf - mean(y_inf))^2)
+ss_res     <- sum(residuals^2)
+r_squared  <- 1 - ss_res / ss_tot
+
+# Combining the data into a tibble
+plot_data <- tibble(
+  Index = 1:length(y_inf), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Actual = as.vector(y_inf),
+  Fitted = as.vector(inf_fitted)
+) %>%
+  # Pivot to long format for ggplot2
+  pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
+
+# Generating the plot
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+  geom_line(linewidth = 0.8) +
+  
+  # Set specific colors to easily distinguish the series
+  scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
+  
+  # Add titles, labels, and dynamically inject the R-squared and MSE
+  labs(
+    title = "In-Sample Estimation: Actual vs. Fitted GDP",
+    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    x = "Time (Index)", # <--- Update x-axis label
+    y = "GDP Growth (Log Difference)",
+    color = NULL
+  ) +
+  
+  # Apply a clean, academic theme
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "darkgrey", size = 11)
+  )
+```
+
+```{r}
+lambda_hat <- opt_res$par[1:n]
+tibble(
+  Indicator = colnames(y),
+  Group     = c(rep("Real", 4), rep("Price", 4)),
+  Lambda    = lambda_hat
+)
 ```
 
 ```{r}
