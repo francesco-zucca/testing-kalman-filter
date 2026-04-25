@@ -1663,6 +1663,367 @@ tibble(
 
 ## 3.2 Estimated Using Stock & Watson
 
+```{r}
+### LOADING DATA (same as original, PCEPI stays in y_raw)
+
+gdp_id <- "GDPC1"
+real_ids <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1")
+price_ids <- c("CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
+ids <- c(gdp_id, real_ids, price_ids)
+
+data_file <- "fred_macro_data2.rds"
+if (file.exists(data_file)) {
+  raw_data <- read_rds(data_file)
+} else {
+  raw_data <- tq_get(ids, get = "economic.data",
+                     from = "1969-10-01", to = "2025-01-01")
+  write_rds(raw_data, data_file)
+}
+
+raw_data <- raw_data %>% mutate(date = floor_date(date, "month"))
+
+data_monthly <- raw_data %>%
+  pivot_wider(names_from = symbol, values_from = price) %>%
+  arrange(date)
+
+df_aligned <- data_monthly %>%
+  arrange(date) %>%
+  mutate(GDPC1 = lag(GDPC1, 2))
+
+df_clean <- df_aligned %>%
+  arrange(date) %>%
+  mutate(
+    across(all_of(c(real_ids, price_ids)),
+           ~ (log(.x) - log(lag(.x, 1))) * 100),
+    GDPC1 = (log(GDPC1) - log(lag(GDPC1, 3))) * 100
+  ) %>%
+  drop_na(PAYEMS)
+
+# Targets (held out for OLS mapping step)
+gdp       <- df_clean %>% select(GDPC1) %>% drop_na(GDPC1) %>% as.matrix()
+inflation <- df_clean %>% select(PCEPI) %>% drop_na(PCEPI) %>% as.matrix()
+
+# All 8 indicators enter the Kalman filter together (PCEPI included)
+# Ordering: INDPRO, CMRMTSPL, PAYEMS, W875RX1, CPIAUCSL, CPILFESL, PCEPI, PPIACO
+y_raw <- df_clean %>% select(-date, -GDPC1) %>% as.matrix()
+y     <- scale(y_raw)
+n     <- ncol(y)   # n = 8
+TT    <- nrow(y)
+varQ  <- 1
+
+
+### MATRIX FUNCTION ###
+
+# State vector (dim = 4 + 2n = 20):
+# [f1_t, f1_{t-1}, f2_t, f2_{t-1}, u1_t, u1_{t-1}, ..., u8_t, u8_{t-1}]
+#
+# Parameter layout (43 total for n = 8):
+#   th[1:n]            → λ1 (factor 1 loadings, all n indicators)
+#   th[(n+1):(2n-1)]   → λ2 (factor 2 loadings, indicators 2:n; λ2_1 = 0 fixed)
+#   th[2n],  th[2n+1]  → φ1_1, φ1_2 (factor 1 AR2)
+#   th[2n+2],th[2n+3]  → φ2_1, φ2_2 (factor 2 AR2)
+#   th[(2n+4):(4n+3)]  → ψ_i1, ψ_i2 for i=1..n (idiosyncratic AR2)
+#   th[(4n+4):(5n+3)]  → σ_1..σ_n (idiosyncratic SDs)
+
+matrices <- function(th, n, varQ) {
+
+  ### H: measurement matrix (n × 20)
+
+  # h1 extracts u_{i,t} from the idiosyncratic part of the state vector
+  h1 <- rbind(
+    c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0),
+    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0),
+    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0),
+    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
+  )
+
+  # Lower-triangular identification: fix λ2_1 = 0 so factor 2 doesn't load on INDPRO
+  # This is the minimal restriction needed to pin down factor rotation
+  lambda2 <- c(0, th[(n + 1):(2 * n - 1)])
+
+  # H = [λ1 | 0 | λ2 | 0 | h1]
+  Hmat <- cbind(th[1:n], matrix(0, n, 1), lambda2, matrix(0, n, 1), h1)
+
+  ### F: transition matrix (20 × 20)
+
+  # Factor 1 AR(2): rows 1–2
+  f1  <- c(th[2*n],     th[2*n+1],  0,           0,          rep(0, 16))
+  f2  <- c(1,           0,           0,           0,          rep(0, 16))
+  # Factor 2 AR(2): rows 3–4
+  f3  <- c(0,           0,           th[2*n+2],  th[2*n+3],  rep(0, 16))
+  f4  <- c(0,           0,           1,           0,          rep(0, 16))
+  # Idiosyncratic AR(2) for each indicator: rows 5–20
+  f5  <- c(rep(0, 4),  th[2*n+4],  th[2*n+5],  rep(0, 14))
+  f6  <- c(rep(0, 4),  1,           0,           rep(0, 14))
+  f7  <- c(rep(0, 6),  th[2*n+6],  th[2*n+7],  rep(0, 12))
+  f8  <- c(rep(0, 6),  1,           0,           rep(0, 12))
+  f9  <- c(rep(0, 8),  th[2*n+8],  th[2*n+9],  rep(0, 10))
+  f10 <- c(rep(0, 8),  1,           0,           rep(0, 10))
+  f11 <- c(rep(0, 10), th[2*n+10], th[2*n+11], rep(0, 8))
+  f12 <- c(rep(0, 10), 1,           0,           rep(0, 8))
+  f13 <- c(rep(0, 12), th[2*n+12], th[2*n+13], rep(0, 6))
+  f14 <- c(rep(0, 12), 1,           0,           rep(0, 6))
+  f15 <- c(rep(0, 14), th[2*n+14], th[2*n+15], rep(0, 4))
+  f16 <- c(rep(0, 14), 1,           0,           rep(0, 4))
+  f17 <- c(rep(0, 16), th[2*n+16], th[2*n+17], rep(0, 2))
+  f18 <- c(rep(0, 16), 1,           0,           rep(0, 2))
+  f19 <- c(rep(0, 18), th[2*n+18], th[2*n+19])
+  f20 <- c(rep(0, 18), 1,           0)
+
+  Fmat <- rbind(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10,
+                f11, f12, f13, f14, f15, f16, f17, f18, f19, f20)
+
+  ### R: zero (errors absorbed into state vector)
+  Rmat <- matrix(0, n, n)
+
+  ### Q: state shock variances (20 × 20 diagonal)
+  # Both factor variances normalized to varQ = 1 for identification
+  th2_val <- kronecker(th[(4*n+4):(5*n+3)]^2, matrix(c(1, 0), ncol = 1))
+  Qmat    <- diag(c(varQ, 0, varQ, 0, as.vector(th2_val)))
+
+  return(list(Rmat = Rmat, Qmat = Qmat, Hmat = Hmat, Fmat = Fmat))
+}
+
+
+### KALMAN FILTER FUNCTION ###
+
+kalman <- function(th, y, n, TT, varQ) {
+
+  mats   <- matrices(th, n, varQ)
+  Hmat   <- mats$Hmat
+  Fmat   <- mats$Fmat
+  Rmat   <- mats$Rmat
+  Qmat   <- mats$Qmat
+
+  # State dimension is now 4 + 2n = 20
+  h00        <- matrix(0, nrow = 4 + 2 * n, ncol = 1)
+  Pmat00     <- diag(4 + 2 * n)
+  like       <- matrix(0, nrow = TT, ncol = 1)
+  filter_mat <- matrix(0, nrow = TT, ncol = 4 + 2 * n)
+
+  for (it in 1:TT) {
+    h10     <- Fmat %*% h00
+    Pmat10  <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
+    y10     <- Hmat %*% h10
+    e10     <- matrix(y[it, ], ncol = 1) - y10
+    Fmat10  <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat
+    like[it] <- -0.5 * (log(2 * pi * det(Fmat10)) + t(e10) %*% solve(Fmat10) %*% e10)
+    Kmat    <- Pmat10 %*% t(Hmat) %*% solve(Fmat10)
+    h11     <- h10 + Kmat %*% e10
+    Pmat11  <- Pmat10 - Kmat %*% Hmat %*% Pmat10
+    filter_mat[it, ] <- t(h11)
+    h00     <- h11
+    Pmat00  <- Pmat11
+  }
+
+  return(list(neg_loglik = -sum(like), filter_mat = filter_mat, Fmat = Fmat))
+}
+
+ofn <- function(th, y, n, TT, varQ) kalman(th, y, n, TT, varQ)$neg_loglik
+
+
+### COEFFICIENT ESTIMATION ###
+
+# Factor 1 loadings: higher for real indicators (1-4), lower for price (5-8)
+B1    <- matrix(c(0.9, 0.8, 0.7, 0.6, 0.1, 0.1, 0.1, 0.1), ncol = 1)
+# Factor 2 loadings (n-1 = 7): lower for real (2-4), higher for price (5-8)
+# Note: λ2_1 is fixed to 0 inside matrices(), so we only pass λ2_2..λ2_8
+B2    <- matrix(c(0.1, 0.1, 0.1, 0.6, 0.7, 0.8, 0.9), ncol = 1)
+phif1 <- matrix(0.3, nrow = 2, ncol = 1)       # factor 1 AR(2)
+phif2 <- matrix(0.3, nrow = 2, ncol = 1)       # factor 2 AR(2)
+phiy  <- matrix(0.3, nrow = n * 2, ncol = 1)  # idiosyncratic AR(2) — 16 params
+v     <- matrix(apply(y, 2, sd), ncol = 1)    # idiosyncratic SDs — 8 params
+
+startval <- rbind(B1, B2, phif1, phif2, phiy, v)  # 43 params total
+
+opt_res <- optim(par     = as.vector(startval),
+                   fn      = ofn,
+                   y = y, n = n, TT = TT, varQ = varQ,
+                   method  = "BFGS",
+                   hessian = TRUE,
+                   control = list(maxit = 2000))
+
+cramerrao <- solve(opt_res$hessian)
+std_err   <- sqrt(diag(cramerrao))
+
+
+### EXTRACTING BOTH FACTORS (Post-Estimation) ###
+
+final_kf   <- kalman(opt_res$par, y, n, TT, varQ)
+filter_mat <- final_kf$filter_mat
+Fmat       <- final_kf$Fmat
+
+# Factor 1 (real activity): column 1 of state vector → f1_t
+factor_real  <- filter_mat[, 1]
+
+# Factor 2 (price): column 3 of state vector → f2_t
+factor_price <- filter_mat[, 3]
+
+
+### CONVERTING REAL FACTOR TO QUARTERLY GROWTH RATE (for GDP mapping) ###
+
+factorQ <- (1/3) * factor_real[5:length(factor_real)] +
+           (2/3) * factor_real[4:(length(factor_real) - 1)] +
+                   factor_real[3:(length(factor_real) - 2)] +
+           (2/3) * factor_real[2:(length(factor_real) - 3)] +
+           (1/3) * factor_real[1:(length(factor_real) - 4)]
+
+i <- 1; factgdp <- c()
+while (i <= (TT - 4)) { factgdp <- c(factgdp, factorQ[i]); i <- i + 3 }
+```
+
+```{r}
+### MAPPING TO INFLATION (OLS) ###
+
+# Target inflation series (held-out, e.g. PCEPI log-diff)
+y_inf <- inflation   # your held-out series as a matrix
+
+# OLS
+x <- cbind(1, factor_price)
+b <- solve(t(x) %*% x) %*% t(x) %*% y_inf
+
+### IN-SAMPLE PERFORMANCE ###
+inf_fitted <- x %*% b
+residuals  <- y_inf - inf_fitted
+mse        <- mean(residuals^2)
+ss_tot     <- sum((y_inf - mean(y_inf))^2)
+ss_res     <- sum(residuals^2)
+r_squared  <- 1 - ss_res / ss_tot
+
+# Combining the data into a tibble
+plot_data <- tibble(
+  Index = 1:length(y_inf), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Actual = as.vector(y_inf),
+  Fitted = as.vector(inf_fitted)
+) %>%
+  # Pivot to long format for ggplot2
+  pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
+
+# Generating the plot
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+  geom_line(linewidth = 0.8) +
+  
+  # Set specific colors to easily distinguish the series
+  scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
+  
+  # Add titles, labels, and dynamically inject the R-squared and MSE
+  labs(
+    title = "In-Sample Estimation: Actual vs. Fitted GDP",
+    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    x = "Time (Index)", # <--- Update x-axis label
+    y = "GDP Growth (Log Difference)",
+    color = NULL
+  ) +
+  
+  # Apply a clean, academic theme
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "darkgrey", size = 11)
+  )
+```
+
+```{r}
+# Estimating the GDP
+
+# Defining the data
+y_gdp <- gdp
+
+# Creating the X matrix with a column of 1s for the intercept
+x <- cbind(1, factgdp)
+
+# Computing the OLS coefficients
+b <- solve(t(x) %*% x) %*% t(x) %*% y_gdp
+
+### IN-SAMPLE ESTIMATES OF GDP AND PERFORMANCE MEASURES ###
+
+# Translating all historical factors into estimated GDP 
+gdp_fitted <- x %*% b
+
+# Calculating the residuals
+residuals <- y_gdp - gdp_fitted
+
+# Calculating Mean Squared Error (MSE)
+mse <- mean(residuals^2)
+
+# Calculating R-squared
+ss_tot <- sum((y_gdp - mean(y_gdp))^2)
+ss_res <- sum(residuals^2)
+r_squared <- 1 - (ss_res / ss_tot)
+
+### PLOTTING ###
+
+# Combining the data into a tibble
+plot_data <- tibble(
+  Index = 1:length(y_gdp), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Actual = as.vector(y_gdp),
+  Fitted = as.vector(gdp_fitted)
+) %>%
+  # Pivot to long format for ggplot2
+  pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
+
+# Generating the plot
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+  geom_line(linewidth = 0.8) +
+  
+  # Set specific colors to easily distinguish the series
+  scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
+  
+  # Add titles, labels, and dynamically inject the R-squared and MSE
+  labs(
+    title = "In-Sample Estimation: Actual vs. Fitted GDP",
+    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    x = "Time (Index)", # <--- Update x-axis label
+    y = "GDP Growth (Log Difference)",
+    color = NULL
+  ) +
+  
+  # Apply a clean, academic theme
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "darkgrey", size = 11)
+  )
+```
+
+```{r}
+### EXTRACTING FACTOR LOADINGS ###
+
+th <- opt_res$par
+
+# Factor 1 loadings: λ1_1 ... λ1_8 (one per indicator)
+lambda1 <- th[1:n]
+
+# Factor 2 loadings: λ2_1 is fixed to 0 (identification restriction),
+# so prepend it manually before the estimated λ2_2 ... λ2_8
+lambda2 <- c(0, th[(n + 1):(2 * n - 1)])
+
+# Combine into a readable table
+indicator_names <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1",
+                     "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
+
+loadings_df <- data.frame(
+  Indicator = indicator_names,
+  Lambda1   = round(lambda1, 4),   # real activity factor
+  Lambda2   = round(lambda2, 4)    # price factor
+)
+
+print(loadings_df)
+
+# Standard errors for the loadings (same slices from std_err)
+se_lambda1 <- std_err[1:n]
+se_lambda2 <- c(NA, std_err[(n + 1):(2 * n - 1)])  # NA for the fixed zero
+
+loadings_df$SE_Lambda1 <- round(se_lambda1, 4)
+loadings_df$SE_Lambda2 <- round(se_lambda2, 4)
+```
+
 ## 3.3 Parallel Analysis
 
 # Bibliography
