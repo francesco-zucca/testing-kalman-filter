@@ -29,11 +29,13 @@ bibliography: references.bib
 
 # Abstract
 
-In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that comovements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic one-factor model, where the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth [@S&W1988].
+In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that co-movements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic single-factor model in which the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth [@S&W1988].
 
-The objective of this project is to empirically evaluate and extend the Stock and Watson (S&W) model. First, we will verify the assumptions of one-factor models, specifically by testing the tetrad constraints in a dynamic settings. Then, we will asses its predictive performance by replicating the model on more recent data and comparing the estimated latent factor to actual GDP growth. Furthermore, because macroeconomic data frequently exhibits heavy tailed behaviors, we will test the robustness of the Kalman filter by simulating economies under progressively more elliptical distribution.
+This project empirically tests the Kalman filter under two different forms of misspecification, departing from the original Stock and Watson assumptions. We begin by replicating the model on more recent data to establish a performance benchmark, confirming that the original model yields a latent factor that continues to track GDP growth well, with an $R^2$ of $0.763$ and MSE of $0.277$.
 
-Finally, we will expand the number of indicators included in the model by incorporating more macroeconomic variables. To avoid adding too many variables, and therefore too much noise to the model, we will apply a Lasso penalty to the factor loadings of the indicators. Specifically, we will force sparsity on the new indicators, while simultaneously not assigning any penalty to the original four indicators in order to retain them. With this setup, we will ensure that the original four indicators will still represent the foundation of our model, while squeezing extra predictive value out of a larger dataset.
+Next, we assess the robustness of the Kalman filter to violation of the Gaussianity assumption. Since macroeconomic data frequently exhibits heavy tailed and asymmetric behaviors, we simulate economies under progressively more elliptical and skewed distributions. We find that convergence to the true latent factor is faster under Gaussian errors and slows as distributions become more elliptical or skewed. However, the Kalman filter continues to recover the true factor in large samples across all specifications.
+
+Finally, we expand the number of indicators, including price-side variables and therefore introducing a second latent factor into the data-generating process. Estimating a single-factor model on this augmented dataset, we find that the Kalman filter recovers only the real-activity factor, assigning loadings close to zero to all price indicators. After re-estimating the model under the correct two-factor specification, the Kalman filter successfully recovers both the real-activity factor and price-pressure factor, yielding an $R^2$ of $0.764$ against GDP growth and $0.926$ against PCEPI inflation.
 
 # 1. The Stock & Watson model
 
@@ -959,7 +961,7 @@ Together, these results provide formal evidence of the consistency without effic
 
 In this chapter we empirically examine how the Kalman filter behaves when the number of factors is misspecified. Specifically, we extend the original Stock & Watson framework by introducing four indicators from the price side of the economy, which are expected to share a second latent factor that tracks inflation rather than real activity. By mixing real and price indicators in a single-factor model, we deliberately misspecify the factor structure to illustrate what happens when variables are added blindly under the assumption that a larger dataset inherently yields a better fit.
 
-## 3.1 Using Parallel Analysis to Determine the Number of Factors
+## 3.1. Using Parallel Analysis to Determine the Number of Factors
 
 Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
 
@@ -1095,7 +1097,7 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
 
 The results of parallel analysis on the original Stock and Watson model are displayed in figure X. The first eigenvalue has a magnitude of around $2.7$, well above the AR(2) noise benchmark of approximately $1.1$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.65$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
-## 3.2 Introducing More Indicators
+## 3.2. Introducing More Indicators
 
 We now extend the dataset by adding four indicators from the price side of the U.S. economy. The four price indicators we add are the following, all expressed in log-differences to reflect percentage changes:
 
@@ -1685,12 +1687,14 @@ ggcorrplot(R_obs,
            colors   = c("steelblue", "white", "red3"),
            title    = "Correlation matrix of the eight indicators") +
   geom_hline(yintercept = 4.5, color = "grey40") +
-  geom_vline(xintercept = 4.5, color = "grey40")
+  geom_vline(xintercept = 4.5, color = "grey40") +
+  theme(axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
 ```
 
 When estimating a single-factor model via maximum likelihood, the Kalman filter commits to the direction associated to the highest eigenvalue. Hence, the likelihood is maximized by estimating the latent factor that drives the real-activity indicators, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idosyncratic error terms.
 
-## 3.3 Re-estimating with the correct specification
+## 3.3. Re-estimating with the correct specification
 
 After re-estimating the model with a Kalman filter with a two-factor specification, we can see that factor 1 maps well to GDP, while factor 2 maps well to inflation.
 
@@ -1948,7 +1952,7 @@ plot_data <- tibble(
 
 # Generating the plot
 ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
-  geom_line(linewidth = 0.8) +
+  geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
   scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
@@ -1956,7 +1960,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
     title = "Actual vs. Fitted GDP (in-sample)",
-    subtitle = sprintf("R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    subtitle = sprintf("R-squared = %.3f | MSE = %.3f", r_squared, mse),
     x = "Time", # <--- Update x-axis label
     y = "Quarterly GDP growth (%)",
     color = NULL
@@ -2000,7 +2004,7 @@ plot_data <- tibble(
 
 # Generating the plot
 ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
-  geom_line(linewidth = 0.8) +
+  geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
   scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
