@@ -1100,14 +1100,16 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
 
 The results of parallel analysis on the original Stock and Watson model are displayed in figure X. The first eigenvalue has a magnitude of around $2.7$, well above the AR(2) noise benchmark of approximately $1.1$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.65$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
-## 3.2 Introducing More Variables
+## 3.2 Introducing More Indicators
 
-We will now introduce more variables from the price side of the economy, instead that from the real side. Now, we include in our indicators:
+We now extend the dataset by adding four indicators from the price side of the U.S. economy. The four price indicators we add are the following, all expressed in log-differences to reflect percentage changes:
 
--   CPIAUCSL (Consumer Price Index, all items)
--   CPILFESL (Consumer Price Index, all items less food and energy)
--   PCEPI (Personal Consumption Expenditures)
--   PPIACO (Producer Price Index, all commodities)
+-   CPIAUCSL (Consumer Price Index, all items).
+-   CPILFESL (Consumer Price Index, all items less food and energy).
+-   PCEPI (Personal Consumption Expenditures Price Index).
+-   PPIACO (Producer Price Index, all commodities).
+
+The results of parallel analysis on the expanded dataset are reported in Figure X. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.1$ (versus a benchmark of $1.2$), and the second is around $2.6$ (against $1.1$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators. 
 
 ```{r}
 ### LIBRARIES
@@ -1422,6 +1424,130 @@ while(i <= (TT - 4)) {
 ```
 
 ```{r}
+### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
+
+library(psych)
+
+# Extracting the estimated coefficient
+th <- opt_res$par
+
+# Extracting the idiosyncratic AR(2) coefficients for each indicator
+psi_hat <- matrix(th[(n + 3):(n + 18)], nrow = n, ncol = 2, byrow = TRUE)
+
+# Extracting the variance for each indicator
+sigma_hat  <- th[(n + 19):(n + 26)]
+sigma2_hat <- sigma_hat^2
+
+# COMPUTING THE EIGENVALUES OF THE FRED DATA
+
+# Correlation matrix of the actual data
+R_obs <- cor(y)
+
+# Extracting the eigenvalues
+eig_obs <- eigen(R_obs)$values
+
+# AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
+
+# Defining the simulation function
+ar2_null <- function(TT, n, psi, sigma2) {
+  
+  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
+  # the stationary part of the process
+  burnin <- 50
+  TT_total <- TT + burnin
+  
+  # Simulate AR(2) errors
+  
+  # Placeholder matrix
+  U <- matrix(0, nrow = TT_total, ncol = n)
+  
+  # For loop to generate the errors with the estimated standard deviations
+  for (i in 1:n) {
+    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
+    
+    # For loop to generate the matrix of the simulated indicators without the factor
+    for (t in 3:TT_total) {
+      U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
+    }
+  }
+  
+  # Discarding the burn-in and rescaling
+  y_gen <- U[(burnin + 1):TT_total, ]
+  y_gen <- scale(y_gen)
+  return(y_gen)
+}
+
+# MONTE CARLO SIMULATION
+
+# Defining the number of simulations
+n_sim <- 500
+
+# Starting the matrix for the simulated eigenvalues (each row is the eigenvalues for one simulation)
+eig_sim_mat <- matrix(NA, nrow = n_sim, ncol = n)
+
+# Running the simulation
+set.seed(42)
+for (s in 1:n_sim) {
+  y_sim <- ar2_null(TT, n, psi_hat, sigma2_hat)
+  eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
+}
+
+# Mean eigenvalues across simulations at each rank
+eig_sim <- colMeans(eig_sim_mat)
+
+# Printing the first 5 eigenvalues
+n_print <- min(5, n)
+
+eig_table <- data.frame(
+  Index     = 1:n_print,
+  Observed  = round(eig_obs[1:n_print], 4),
+  Benchmark = round(eig_sim[1:n_print], 4)
+)
+
+cat("\n--- First", n_print, "Eigenvalues ---\n")
+print(eig_table, row.names = FALSE)
+
+# Determining the number of factors
+n_factors <- sum(eig_obs > eig_sim)
+cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
+
+# Plotting
+plot_pa <- tibble(
+  Index     = 1:n,
+  Observed  = eig_obs,
+  Benchmark = eig_sim
+) %>%
+  pivot_longer(cols = c(Observed, Benchmark), 
+               names_to = "Series", values_to = "Eigenvalue")
+
+ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
+                    color = Series, linetype = Series, shape = Series)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = n_factors + 0.5, 
+             linetype = "dotted", color = "grey40") +
+  scale_color_manual(values = c("Observed" = "steelblue", 
+                                "Benchmark" = "red3")) +
+  scale_linetype_manual(values = c("Observed" = "solid", 
+                                   "Benchmark" = "dashed")) +
+  scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
+  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
+           label = "keep", color = "grey40", size = 3.5) +
+  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
+           label = "discard", color = "grey40", size = 3.5) +
+  labs(
+    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
+    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
+                       n_factors),
+    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
+    linetype = NULL, shape = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold", size = 13))
+```
+
+```{r}
 # Estimating the GDP
 
 # Defining the data
@@ -1538,120 +1664,6 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
 ```
 
 As shown by figure x, the factor keeps tracking very well the real economy, hence it still maps well to GDP. However, it completely fails tracking inflation, even if in our indicators we are including the variable we are mapping to (CEPI).
-
-```{r}
-### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
-
-library(psych)
-
-# Extracting the estimated coefficient
-th <- opt_res$par
-
-# Extracting the idiosyncratic AR(2) coefficients for each indicator
-psi_hat <- matrix(th[(n + 3):(n + 18)], nrow = n, ncol = 2, byrow = TRUE)
-
-# Extracting the variance for each indicator
-sigma_hat  <- th[(n + 19):(n + 26)]
-sigma2_hat <- sigma_hat^2
-
-# COMPUTING THE EIGENVALUES OF THE FRED DATA
-
-# Correlation matrix of the actual data
-R_obs <- cor(y)
-
-# Extracting the eigenvalues
-eig_obs <- eigen(R_obs)$values
-
-# AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
-
-# Defining the simulation function
-ar2_null <- function(TT, n, psi, sigma2) {
-  
-  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
-  # the stationary part of the process
-  burnin <- 50
-  TT_total <- TT + burnin
-  
-  # Simulate AR(2) errors
-  
-  # Placeholder matrix
-  U <- matrix(0, nrow = TT_total, ncol = n)
-  
-  # For loop to generate the errors with the estimated standard deviations
-  for (i in 1:n) {
-    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
-    
-    # For loop to generate the matrix of the simulated indicators without the factor
-    for (t in 3:TT_total) {
-      U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
-    }
-  }
-  
-  # Discarding the burn-in and rescaling
-  y_gen <- U[(burnin + 1):TT_total, ]
-  y_gen <- scale(y_gen)
-  return(y_gen)
-}
-
-# MONTE CARLO SIMULATION
-
-# Defining the number of simulations
-n_sim <- 500
-
-# Starting the matrix for the simulated eigenvalues (each row is the eigenvalues for one simulation)
-eig_sim_mat <- matrix(NA, nrow = n_sim, ncol = n)
-
-# Running the simulation
-set.seed(42)
-for (s in 1:n_sim) {
-  y_sim <- ar2_null(TT, n, psi_hat, sigma2_hat)
-  eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
-}
-
-# Mean eigenvalues across simulations at each rank
-eig_sim <- colMeans(eig_sim_mat)
-
-# Determining the number of factors
-n_factors <- sum(eig_obs > eig_sim)
-cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
-
-# Plotting
-plot_pa <- tibble(
-  Index     = 1:n,
-  Observed  = eig_obs,
-  Benchmark = eig_sim
-) %>%
-  pivot_longer(cols = c(Observed, Benchmark), 
-               names_to = "Series", values_to = "Eigenvalue")
-
-ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
-                    color = Series, linetype = Series, shape = Series)) +
-  geom_line(linewidth = 0.8) +
-  geom_point(size = 3) +
-  geom_vline(xintercept = n_factors + 0.5, 
-             linetype = "dotted", color = "grey40") +
-  scale_color_manual(values = c("Observed" = "steelblue", 
-                                "Benchmark" = "red3")) +
-  scale_linetype_manual(values = c("Observed" = "solid", 
-                                   "Benchmark" = "dashed")) +
-  scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
-  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
-           label = "keep", color = "grey40", size = 3.5) +
-  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
-           label = "discard", color = "grey40", size = 3.5) +
-  labs(
-    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
-    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
-                       n_factors),
-    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
-    linetype = NULL, shape = NULL
-  ) +
-  theme_minimal() +
-  theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 13))
-```
-
-When running parallel analysis again we indeed observe two statistically significant factors, corresponding to eigenvalues very different from 1.
 
 ```{r}
 # Extracting factor loadings
