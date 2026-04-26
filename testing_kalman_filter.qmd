@@ -487,124 +487,6 @@ print(p_qq)
 
 Despite the violation of the normality assumption, the Kalman filter extracts a consistent estimate of the latent factor. Indeed, when the parameters are estimated via Gaussian quasi-maximum likelihood, consistency of the parameter estimates is preserved under non-Gaussianity, though with loss of efficiency in finite samples as the distribution moves away from Gaussianity and gets increasingly elliptical [@white1982]. Chapter 2 will be dedicated to an empirical demonstration of the robustness of the Kalman filter, by simulating the economic model proposed by S&W under increasingly elliptical distributions.
 
-## 1.4 Verifying that there is only one underlying factor
-
-One way to check the number of factors present in a model is by using parallel analysis. Nowcasting papers mainly use the criterion suggested by Bai and Ng, however, that criterion is consistent only for $T,N \rightarrow \infty$, and still refers to static factor models, even if it is often used to check for the number of factors in dynamic models.
-
-Therefore, we will use parallel analysis, which consist in comparing the magnitude of eigenvalues of the autocovariance matrix in the model with one factor, with a monte carlo simulation of the eigenvalues in the autocovariance matrix in a model with just the idiosyncratic error component. Since this is usually applied to static models, the idiosyncratic component is usually just white noise. In our case it will be instead follow an AR(2) with the parameters estimated via the Kalman filter.
-
-```{r}
-### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
-
-library(psych)
-
-# Extracting the estimated coefficient
-th <- opt_res$par
-
-# Extracting the idiosyncratic AR(2) coefficients for each indicator
-psi_hat <- matrix(th[(7):(14)], nrow = n, ncol = 2, byrow = TRUE)
-
-# Extracting the variance for each indicator
-sigma_hat <- th[(15):(18)]
-sigma2_hat <- sigma_hat^2
-
-# COMPUTING THE EIGENVALUES OF THE FRED DATA
-
-# Correlation matrix of the actual data
-R_obs <- cor(y)
-
-# Extracting the eigenvalues
-eig_obs <- eigen(R_obs)$values
-
-# AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
-
-# Defining the simulation function
-ar2_null <- function(TT, n, psi, sigma2) {
-  
-  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
-  # the stationary part of the process
-  burnin <- 50
-  TT_total <- TT + burnin
-  
-  # Simulate AR(2) errors
-  
-  # Placeholder matrix
-  U <- matrix(0, nrow = TT_total, ncol = n)
-  
-  # For loop to generate the errors with the estimated standard deviations
-  for (i in 1:n) {
-    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
-    
-    # For loop to generate the matrix of the simulated indicators without the factor
-    for (t in 3:TT_total) {
-      U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
-    }
-  }
-  
-  # Discarding the burn-in and rescaling
-  y_gen <- U[(burnin + 1):TT_total, ]
-  y_gen <- scale(y_gen)
-  return(y_gen)
-}
-
-# MONTE CARLO SIMULATION
-
-# Defining the number of simulations
-n_sim <- 500
-
-# Starting the matrix for the simulated eigenvalues (each row is the eigenvalues for one simulation)
-eig_sim_mat <- matrix(NA, nrow = n_sim, ncol = n)
-
-# Running the simulation
-set.seed(42)
-for (s in 1:n_sim) {
-  y_sim <- ar2_null(TT, n, psi_hat, sigma2_hat)
-  eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
-}
-
-# Mean eigenvalues across simulations at each rank
-eig_sim <- colMeans(eig_sim_mat)
-
-# Determining the number of factors
-n_factors <- sum(eig_obs > eig_sim)
-cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
-
-# Plotting
-plot_pa <- tibble(
-  Index     = 1:n,
-  Observed  = eig_obs,
-  Benchmark = eig_sim
-) %>%
-  pivot_longer(cols = c(Observed, Benchmark), 
-               names_to = "Series", values_to = "Eigenvalue")
-
-ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
-                    color = Series, linetype = Series, shape = Series)) +
-  geom_line(linewidth = 0.8) +
-  geom_point(size = 3) +
-  geom_vline(xintercept = n_factors + 0.5, 
-             linetype = "dotted", color = "grey40") +
-  scale_color_manual(values = c("Observed" = "steelblue", 
-                                "Benchmark" = "red3")) +
-  scale_linetype_manual(values = c("Observed" = "solid", 
-                                   "Benchmark" = "dashed")) +
-  scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
-  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
-           label = "keep", color = "grey40", size = 3.5) +
-  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
-           label = "discard", color = "grey40", size = 3.5) +
-  labs(
-    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
-    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
-                       n_factors),
-    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
-    linetype = NULL, shape = NULL
-  ) +
-  theme_minimal() +
-  theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 13))
-```
-
 # 2. Breaking Gaussianity
 
 The Kalman filter is derived under the assumption that all structural shocks follow a Gaussian distribution, which grants it the property of being the minimum variance unbiased estimator of the latent factor. When this assumption is violated, the filter estimated via Gaussian quasi-maximum likelihood remains consistent, meaning the estimated parameters still converge to their true values as $T \rightarrow \infty$, but **loses efficiency in finite samples**.
@@ -1080,15 +962,136 @@ Together, these results provide formal evidence of the consistency without effic
 
 # 3. Two-Factor Model
 
-motivation: want to improve performance (increase R\^2 from 75%)
+In this chapter we are going to emprically test what happens if the number of factors in the model is misspecified. We will do so by adding variables that represent the price-side of the economy, which will generate a second factor that maps to inflation. We do this to show what happens if we blindly add variables to the model with the hope of improving performance.
 
-what happens when we generate a second latent variable by including more macro variables in the model? (I.e., we add in financial variables and generate financial latent factor) and we try to run S&W under the one-factor assumption? Should be biased, breaks; we try to recover the second latent factor with some sort of dynamic parallel analysis.
+# 3.1 Parallel analysis
 
-tdl: - find vars to generate second variable - build new model using vars, run thru kalman filter - compare to results from part 1.1, show that it is biased - explain why this is - try to extract second latent factor using parallel analysis, need to show this in section 1 before Kalman filters
+One way to check the number of factors present in a model is by using parallel analysis. Nowcasting papers mainly use the criterion suggested by Bai and Ng, which minimizes variance while giving a penalty based on the number of factors included in the model, to avoid adding too many factors. However, that criterion is consistent only for $T,N \rightarrow \infty$, and still refers to static factor models, even if it is often used to check for the number of factors in dynamic models.
 
-## 3.1 Introducing More Variables
+We will instead use parallel analysis. Horn argues that the method used by Kaiser is wrong, since in finite samples the eigenvalues of the random noise covariance matrix will not be all equal to 1 because of sampling error. Instead, he proposes a method which consist in comparing the magnitude of eigenvalues of the autocovariance matrix in the model with one factor, with a monte carlo simulation of the eigenvalues in the autocovariance matrix in a model with just the idiosyncratic error component. You keep only factors that correspond to eigenvalues significantly different from the noise-simulated ones. Since this is usually applied to static models, the idiosyncratic component is usually just white noise. In our case it will be instead follow an AR(2) with the parameters estimated via the Kalman filter.
 
-We will now introduce more variables from the price side of the economy, instead that from the real side.
+```{r}
+### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
+
+library(psych)
+
+# Extracting the estimated coefficient
+th <- opt_res$par
+
+# Extracting the idiosyncratic AR(2) coefficients for each indicator
+psi_hat <- matrix(th[(7):(14)], nrow = n, ncol = 2, byrow = TRUE)
+
+# Extracting the variance for each indicator
+sigma_hat <- th[(15):(18)]
+sigma2_hat <- sigma_hat^2
+
+# COMPUTING THE EIGENVALUES OF THE FRED DATA
+
+# Correlation matrix of the actual data
+R_obs <- cor(y)
+
+# Extracting the eigenvalues
+eig_obs <- eigen(R_obs)$values
+
+# AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
+
+# Defining the simulation function
+ar2_null <- function(TT, n, psi, sigma2) {
+  
+  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
+  # the stationary part of the process
+  burnin <- 50
+  TT_total <- TT + burnin
+  
+  # Simulate AR(2) errors
+  
+  # Placeholder matrix
+  U <- matrix(0, nrow = TT_total, ncol = n)
+  
+  # For loop to generate the errors with the estimated standard deviations
+  for (i in 1:n) {
+    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
+    
+    # For loop to generate the matrix of the simulated indicators without the factor
+    for (t in 3:TT_total) {
+      U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
+    }
+  }
+  
+  # Discarding the burn-in and rescaling
+  y_gen <- U[(burnin + 1):TT_total, ]
+  y_gen <- scale(y_gen)
+  return(y_gen)
+}
+
+# MONTE CARLO SIMULATION
+
+# Defining the number of simulations
+n_sim <- 500
+
+# Starting the matrix for the simulated eigenvalues (each row is the eigenvalues for one simulation)
+eig_sim_mat <- matrix(NA, nrow = n_sim, ncol = n)
+
+# Running the simulation
+set.seed(42)
+for (s in 1:n_sim) {
+  y_sim <- ar2_null(TT, n, psi_hat, sigma2_hat)
+  eig_sim_mat[s, ] <- eigen(cor(y_sim))$values
+}
+
+# Mean eigenvalues across simulations at each rank
+eig_sim <- colMeans(eig_sim_mat)
+
+# Determining the number of factors
+n_factors <- sum(eig_obs > eig_sim)
+cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
+
+# Plotting
+plot_pa <- tibble(
+  Index     = 1:n,
+  Observed  = eig_obs,
+  Benchmark = eig_sim
+) %>%
+  pivot_longer(cols = c(Observed, Benchmark), 
+               names_to = "Series", values_to = "Eigenvalue")
+
+ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
+                    color = Series, linetype = Series, shape = Series)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = n_factors + 0.5, 
+             linetype = "dotted", color = "grey40") +
+  scale_color_manual(values = c("Observed" = "steelblue", 
+                                "Benchmark" = "red3")) +
+  scale_linetype_manual(values = c("Observed" = "solid", 
+                                   "Benchmark" = "dashed")) +
+  scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
+  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
+           label = "keep", color = "grey40", size = 3.5) +
+  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
+           label = "discard", color = "grey40", size = 3.5) +
+  labs(
+    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
+    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
+                       n_factors),
+    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
+    linetype = NULL, shape = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold", size = 13))
+```
+
+Indeed, the plot shows only one significant factor.
+
+## 3.2 Introducing More Variables
+
+We will now introduce more variables from the price side of the economy, instead that from the real side. Now, we include in our indicators:
+
+-   CPIAUCSL (Consumer Price Index, all items)
+-   CPILFESL (Consumer Price Index, all items less food and energy)
+-   PCEPI (Personal Consumption Expenditures)
+-   PPIACO (Producer Price Index, all commodities)
 
 ```{r}
 ### LIBRARIES
@@ -1450,10 +1453,10 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "In-Sample Estimation: Actual vs. Fitted GDP",
-    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
-    x = "Time (Index)", # <--- Update x-axis label
-    y = "GDP Growth (Log Difference)",
+    title = "Actual vs. Fitted GDP (in-sample)",
+    subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
+    x = "Time",
+    y = "Quarterly GDP growth",
     color = NULL
   ) +
   
@@ -1502,10 +1505,10 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "In-Sample Estimation: Actual vs. Fitted GDP",
-    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
-    x = "Time (Index)", # <--- Update x-axis label
-    y = "GDP Growth (Log Difference)",
+    title = "Actual vs. Fitted Inflation (in-sample)",
+    subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
+    x = "Time",
+    y = "Monthly inflation growth (%)",
     color = NULL
   ) +
   
@@ -1518,14 +1521,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
-```{r}
-lambda_hat <- opt_res$par[1:n]
-tibble(
-  Indicator = colnames(y),
-  Group     = c(rep("Real", 4), rep("Price", 4)),
-  Lambda    = lambda_hat
-)
-```
+As shown by figure x, the factor keeps tracking very well the real economy, hence it still maps well to GDP. However, it completely fails tracking inflation, even if in our indicators we are including the variable we are mapping to (CEPI).
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1639,6 +1635,8 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
         plot.title = element_text(face = "bold", size = 13))
 ```
 
+When running parallel analysis again we indeed observe two statistically significant factors, corresponding to eigenvalues very different from 1.
+
 ```{r}
 # Extracting factor loadings
 lambda_hat <- opt_res$par[1:n]
@@ -1648,6 +1646,8 @@ tibble(
   Lambda    = lambda_hat
 )
 ```
+
+When looking at the estimated parameters, the Kalman filter is indeed keeping all the loadings referring to the real economy indicators positive and with magnitude significantly higher than 0, while it's setting the loadings for the price variables very close to 0. **explain why**
 
 ```{r}
 th_hat <- opt_res$par
@@ -1661,10 +1661,12 @@ tibble(
 )
 ```
 
-## 3.2 Estimated Using Stock & Watson
+## 3.3 Re-estimating with the correct specification
+
+After re-estimating the model with a Kalman filter with a two-factor specification, we can see that factor 1 maps well to GDP, while factor 2 maps well to inflation.
 
 ```{r}
-### LOADING DATA (same as original, PCEPI stays in y_raw)
+### LOADING DATA
 
 gdp_id <- "GDPC1"
 real_ids <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1")
@@ -1877,58 +1879,6 @@ while (i <= (TT - 4)) { factgdp <- c(factgdp, factorQ[i]); i <- i + 3 }
 ```
 
 ```{r}
-### MAPPING TO INFLATION (OLS) ###
-
-# Target inflation series (held-out, e.g. PCEPI log-diff)
-y_inf <- inflation   # your held-out series as a matrix
-
-# OLS
-x <- cbind(1, factor_price)
-b <- solve(t(x) %*% x) %*% t(x) %*% y_inf
-
-### IN-SAMPLE PERFORMANCE ###
-inf_fitted <- x %*% b
-residuals  <- y_inf - inf_fitted
-mse        <- mean(residuals^2)
-ss_tot     <- sum((y_inf - mean(y_inf))^2)
-ss_res     <- sum(residuals^2)
-r_squared  <- 1 - ss_res / ss_tot
-
-# Combining the data into a tibble
-plot_data <- tibble(
-  Index = 1:length(y_inf), # <--- ADD THIS: Creates a numeric sequence from 1 to T
-  Actual = as.vector(y_inf),
-  Fitted = as.vector(inf_fitted)
-) %>%
-  # Pivot to long format for ggplot2
-  pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
-
-# Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
-  geom_line(linewidth = 0.8) +
-  
-  # Set specific colors to easily distinguish the series
-  scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
-  
-  # Add titles, labels, and dynamically inject the R-squared and MSE
-  labs(
-    title = "In-Sample Estimation: Actual vs. Fitted GDP",
-    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
-    x = "Time (Index)", # <--- Update x-axis label
-    y = "GDP Growth (Log Difference)",
-    color = NULL
-  ) +
-  
-  # Apply a clean, academic theme
-  theme_minimal() +
-  theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "darkgrey", size = 11)
-  )
-```
-
-```{r}
 # Estimating the GDP
 
 # Defining the data
@@ -1976,10 +1926,10 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "In-Sample Estimation: Actual vs. Fitted GDP",
-    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
-    x = "Time (Index)", # <--- Update x-axis label
-    y = "GDP Growth (Log Difference)",
+    title = "Actual vs. Fitted GDP (in-sample)",
+    subtitle = sprintf("R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    x = "Time", # <--- Update x-axis label
+    y = "Quarterly GDP growth (%)",
     color = NULL
   ) +
   
@@ -1991,6 +1941,60 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
     plot.subtitle = element_text(color = "darkgrey", size = 11)
   )
 ```
+
+```{r}
+### MAPPING TO INFLATION (OLS) ###
+
+# Target inflation series (held-out, e.g. PCEPI log-diff)
+y_inf <- inflation   # your held-out series as a matrix
+
+# OLS
+x <- cbind(1, factor_price)
+b <- solve(t(x) %*% x) %*% t(x) %*% y_inf
+
+### IN-SAMPLE PERFORMANCE ###
+inf_fitted <- x %*% b
+residuals  <- y_inf - inf_fitted
+mse        <- mean(residuals^2)
+ss_tot     <- sum((y_inf - mean(y_inf))^2)
+ss_res     <- sum(residuals^2)
+r_squared  <- 1 - ss_res / ss_tot
+
+# Combining the data into a tibble
+plot_data <- tibble(
+  Index = 1:length(y_inf), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Actual = as.vector(y_inf),
+  Fitted = as.vector(inf_fitted)
+) %>%
+  # Pivot to long format for ggplot2
+  pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
+
+# Generating the plot
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+  geom_line(linewidth = 0.8) +
+  
+  # Set specific colors to easily distinguish the series
+  scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
+  
+  # Add titles, labels, and dynamically inject the R-squared and MSE
+  labs(
+    title = "Actual vs. Fitted Inflation (in-sample)",
+    subtitle = sprintf("R-squared = %.3f | MSE = %.3f", r_squared, mse),
+    x = "Time",
+    y = "Monthly inflation growth (%)",
+    color = NULL
+  ) +
+  
+  # Apply a clean, academic theme
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "darkgrey", size = 11)
+  )
+```
+
+Indeed, as shown in table x, the loadings of indices referring to the real economy are being set close to 0 for factor 2, while the ones referring to prices are being set close to 0 for factor 1.
 
 ```{r}
 ### EXTRACTING FACTOR LOADINGS ###
@@ -2023,7 +2027,5 @@ se_lambda2 <- c(NA, std_err[(n + 1):(2 * n - 1)])  # NA for the fixed zero
 loadings_df$SE_Lambda1 <- round(se_lambda1, 4)
 loadings_df$SE_Lambda2 <- round(se_lambda2, 4)
 ```
-
-## 3.3 Parallel Analysis
 
 # Bibliography
