@@ -1658,9 +1658,9 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
-As shown by figure X, the single factor estimated on the augmented dataset continues to track well real economic activity, achieving very similar, though slighlty worse, in-sample result compared to the ones of the baseline model ($R^2$ $0.759$ against $0.763$, MSE $0.282$ against $0.277$). However, despite including *PCEPI* (the series we use to validate the estimated inflation monthly growth rate) in the indicators, the factor fails to track inflation well, reporting an $R^2$ of $0.01$.
+As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit for actual GDP growth remains strong, with an $R^2$ of $0.759$ and an MSE of $0.282$, only marginally worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.277$. However, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.01$ against monthly *PCEPI* growth.
 
-Looking at the factor loadings reported in Table X, the loadings of the four-real activity indicators are all positive and different from 0, while the loadings on the four price indicators are shrunk to values very close to 0, entirely discarding the price information we added by including the new variables. 
+The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ to $0.90$, while the dour price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely. 
 
 ```{r}
 # Extracting factor loadings
@@ -1671,10 +1671,7 @@ tibble(
   Lambda    = lambda_hat
 )
 ```
-
-Intuitively, this is because he highest eigenvalue points in the direction of highest variance [@Jolliffe2002]. Hence, when we estimate the model via maximum likelihood, the estimator selects the factor direction that explains better the covariance in the data and, being restricted to selecting only one factor that moves in a different direction compared to the one which drives the price indicators, the estimator concentrates on the factor associated to the highest eigenvalue, hence the one associated to the group of indicators which contributes more to the overall likelihood (in our case the one of real economy). 
-
-This becomes clear when looking at the correlation matrix of the eight indicators reported in Figure X: the correlation between the groups of real economy indicators and price indicators is positive an high, while the correlation across groups is close to 0. The Kalman filter is therefore maximizing the likelihood based on the real economy indicators, which are driven by the factor corresponding to the highest eigenvalue, while absorbing the price variation into the idiosyncratic error terms.
+This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in Figure X, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.73$, and the ones in the price group range from $0.23$ to $0.92$. however, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
 
 ```{r}
 library(ggcorrplot)
@@ -1691,7 +1688,7 @@ ggcorrplot(R_obs,
   geom_vline(xintercept = 4.5, color = "grey40")
 ```
 
-
+When estimating a single-factor model via maximum likelihood, the Kalman filter commits to the direction associated to the highest eigenvalue. Hence, the likelihood is maximized by estimating the latent factor that drives the real-activity indicators, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idosyncratic error terms.
 
 ## 3.3 Re-estimating with the correct specification
 
