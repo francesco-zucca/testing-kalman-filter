@@ -56,6 +56,18 @@ Noticeably, to capture the cyclic patter of business cycles, both the factor and
 
 ![](images/clipboard-3627855944.jpeg)
 
+Notice that this model assumes two conditional independence statements. First, the four indicators are cross-sectionally conditionally independent given the latent factor, meaning that once the common factor is known, knowing one indicator provides no additional information about the others. Formally:
+
+$$Y_{i,t} \perp\!\!\!\perp Y_{j,t} \mid F_t \quad \forall\, i \neq j$$
+
+Second, since both the factor and the errors follow an AR(2) process, given the state vector $h_t$ current indicators are conditionally independent of all future and past observations. Formally:
+
+$$y_t \perp\!\!\!\perp \{y_s\}_{s \neq t} \mid h_{t}$$
+
+Where:
+
+$$h_t = (f_t, f_{t-1}, e_{1,t}, e_{1,t-1}, \ldots, e_{n,t}, e_{n,t-1})'$$
+
 ```{r}
 ### LIBRARIES
 
@@ -140,14 +152,19 @@ varQ <- 1
 
 ## 1.1. Latent factor estimation
 
-Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is given by the Kalman filter [@kalman1960]. However, this estimation technique requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the S&W model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor. The structural equations simplify to:
+Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is the Kalman filter [@kalman1960]. At each period $t$, the filter proceeds in two steps. In the prediction step, it forecasts the state vector $h_t$ from the previous estimate using the transition equation. In the update step, after observing $y_t$, it computes the prediction error and corrects the state estimate:
+
+$$\hat{h}_{t|t} = \hat{h}_{t|t-1} + K_t\, e_{t|t-1}, \qquad 
+K_t = P_{t|t-1}H^\top\!\left(HP_{t|t-1}H^\top + R\right)^{-1}$$
+
+The Kalman gain $K_t$ shrinks when observations are noisy, causing the filter to rely more heavily on its own predicton, while it grows when observations are reliable, weighting more heavily the new data and therefore the prediction error. For a full derivation, see [@hamilton1994, Ch. 13].
+
+The Kalman filter, however, requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the Stock and Watson model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor. The state vector $h_{t}$ now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error and the model reduces to the following state-space system:
 
 -   The measurement equation: $y_t = H h_{t}$
 -   The factor transition equation: $h_{t} = Fh_{t-1} + v_{t}, \quad v_{t} \sim i.i.d. N(0,\sigma)$
 
-Where $h_{t}$ is the state vector which now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error.
-
-## 1.2. Mapping the latent factor to GDP growth {#kalman-filter}
+## 1.2. Mapping the latent factor to GDP growth
 
 After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
@@ -347,42 +364,6 @@ while(i < (TT - 4)) {
 ```
 
 ```{r}
-### FORECAST ###
-
-# Extracting the last row of the filter matrix (hT|T)
-hTT <- filter_mat[nrow(filter_mat), ]
-
-# Forecasting
-
-# Estimate the future factor values (just 5 quarters into the future)
-hT1T <- Fmat %*% hTT
-hT2T <- Fmat %*% hT1T
-hT3T <- Fmat %*% hT2T
-hT4T <- Fmat %*% hT3T
-hT5T <- Fmat %*% hT4T
-
-# Append the 5 new forecasted factors (1st element of each state vector) 
-# to the historical factor vector
-factor2 <- c(factor, hT1T[1], hT2T[1], hT3T[1], hT4T[1], hT5T[1])
-
-# Converting to quarterly growth rates
-factor2Q <- (1/3) * factor2[5:length(factor2)] + 
-  (2/3) * factor2[4:(length(factor2) - 1)] + 
-  factor2[3:(length(factor2) - 2)] + 
-  (2/3) * factor2[2:(length(factor2) - 3)] + 
-  (1/3) * factor2[1:(length(factor2) - 4)]
-
-# Downsampling to extract every 3rd month
-length <- length(factor2Q)
-i <- 1
-factgdp2 <- c()
-
-while(i <= length) {
-  fac1 <- factor2Q[i]
-  factgdp2 <- c(factgdp2, fac1)
-  i <- i + 3
-}
-
 # Estimating the GDP
 
 # Defining the data
@@ -394,12 +375,6 @@ x <- cbind(1, factgdp)
 # Computing the OLS coefficients
 b <- solve(t(x) %*% x) %*% t(x) %*% y_gdp
 
-# Generating the forecast, predicting the next two quarters
-yhat1 <- b[1] + b[2] * factgdp2[length(factgdp2) - 1]
-yhat2 <- b[1] + b[2] * factgdp2[length(factgdp2)]
-```
-
-```{r}
 ### IN-SAMPLE ESTIMATES OF GDP AND PERFORMANCE MEASURES ###
 
 # Translating all historical factors into estimated GDP 
