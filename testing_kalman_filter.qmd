@@ -1684,7 +1684,7 @@ ggcorrplot(R_obs,
            type     = "full",
            lab      = TRUE,
            lab_size = 2.5,
-           colors   = c("steelblue", "white", "red3"),
+           colors   = c("steelblue", "white", "red2"),
            title    = "Correlation matrix of the eight indicators") +
   geom_hline(yintercept = 4.5, color = "grey40") +
   geom_vline(xintercept = 4.5, color = "grey40") +
@@ -1696,7 +1696,7 @@ When estimating a single-factor model via maximum likelihood, the Kalman filter 
 
 ## 3.3. Re-estimating with the correct specification
 
-After re-estimating the model with a Kalman filter with a two-factor specification, we can see that factor 1 maps well to GDP, while factor 2 maps well to inflation.
+After re-estimating the model under the correct two-factor specification, the Kalman filter recovers both latent factors. As shown in Figure X, *factor 1* tracks real economic activity closely, yielding an $R^2$ of $0.764$ and an MSE of $0.276$ against quarterly GDP growth, almost identical to the original Stock and Watson model ($R^2 = 0.763$ and $MSE = 0.277$). Meanwhile, *factor 2* now maps well to price pressures, yielding an $R^2$ of $0.926$ and an MSE of $0.005$ against monthly PCEPI inflation.
 
 ```{r}
 ### LOADING DATA
@@ -2027,7 +2027,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
-Indeed, as shown in table x, the loadings of indices referring to the real economy are being set close to 0 for factor 2, while the ones referring to prices are being set close to 0 for factor 1.
+Looking at the loading estimates reported in Table X, *factor 1* indeed loads heavily on real-activity indicators (between $0.532$ and $0.899$), while assigning loadings close to zero to all four price indicators (between $0.044$ and $0.119$). On the other hand, *factor 2* does exactly the opposite, loading strongly on price indicators (between $0.218$ and $0.703$) while assigning near-zero loadings to the real-activity ones (between $-0.101$ and $0.066$).
 
 ```{r}
 ### EXTRACTING FACTOR LOADINGS ###
@@ -2047,8 +2047,8 @@ indicator_names <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1",
 
 loadings_df <- data.frame(
   Indicator = indicator_names,
-  Lambda1   = round(lambda1, 4),   # real activity factor
-  Lambda2   = round(lambda2, 4)    # price factor
+  Lambda1   = round(lambda1, 3),   # real activity factor
+  Lambda2   = round(lambda2, 3)    # price factor
 )
 
 print(loadings_df)
@@ -2057,8 +2057,8 @@ print(loadings_df)
 se_lambda1 <- std_err[1:n]
 se_lambda2 <- c(NA, std_err[(n + 1):(2 * n - 1)])  # NA for the fixed zero
 
-loadings_df$SE_Lambda1 <- round(se_lambda1, 4)
-loadings_df$SE_Lambda2 <- round(se_lambda2, 4)
+loadings_df$SE_Lambda1 <- round(se_lambda1, 3)
+loadings_df$SE_Lambda2 <- round(se_lambda2, 3)
 ```
 
 # Bibliography
