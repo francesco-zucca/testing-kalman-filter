@@ -82,7 +82,7 @@ if (file.exists(data_file)) {
 } else {
   # If no, download from FRED and save it for future renders
   raw_data <- tq_get(ids, get = "economic.data",
-                     from = "1969-10-01", to = "2026-01-01")
+                     from = "1969-10-01", to = "2025-01-01")
   write_rds(raw_data, data_file)
 }
 
@@ -300,18 +300,13 @@ v <- matrix(apply(y, 2, sd), ncol = 1)       # Error variances
 # Vector of initial parameters
 startval <- rbind(B, phif, phiy, v)
 
-# run once, save
-if (!file.exists("results/kalman_results.RData")) {
-  opt_res <- optim(par = as.vector(startval), 
+
+opt_res <- optim(par = as.vector(startval), 
                  fn = ofn,
                  y = y, n = n, TT = TT, varQ = varQ,
                  method = "BFGS", 
                  hessian = TRUE,
                  control = list(maxit = 2000))
-  save(opt_res, file = "results/kalman_results.RData")
-} else {
-  load("results/kalman_results.RData")
-}
 
 # Computing standard errors
 cramerrao <- solve(opt_res$hessian)
@@ -440,7 +435,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
     title = "In-Sample Estimation: Actual vs. Fitted GDP",
-    subtitle = sprintf("Performance Metrics: R-squared = %.4f | MSE = %.4f", r_squared, mse),
+    subtitle = sprintf("Performance Metrics: R-squared = %.3f | MSE = %.3f", r_squared, mse),
     x = "Time (Index)", # <--- Update x-axis label
     y = "GDP Growth (Log Difference)",
     color = NULL
@@ -964,7 +959,7 @@ Together, these results provide formal evidence of the consistency without effic
 
 In this chapter we empirically examine how the Kalman filter behaves when the number of factors is misspecified. Specifically, we extend the original Stock & Watson framework by introducing four indicators from the price side of the economy, which are expected to share a second latent factor that tracks inflation rather than real activity. By mixing real and price indicators in a single-factor model, we deliberately misspecify the factor structure to illustrate what happens when variables are added blindly under the assumption that a larger dataset inherently yields a better fit.
 
-# 3.1 Using Parallel Analysis to Determine the Number of Factors
+## 3.1 Using Parallel Analysis to Determine the Number of Factors
 
 Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
 
@@ -1663,7 +1658,9 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
-As shown by figure x, the factor keeps tracking very well the real economy, hence it still maps well to GDP. However, it completely fails tracking inflation, even if in our indicators we are including the variable we are mapping to (CEPI).
+As shown by figure X, the single factor estimated on the augmented dataset continues to track well real economic activity, achieving very similar, though slighlty worse, in-sample result compared to the ones of the baseline model ($R^2$ $0.759$ against $0.763$, MSE $0.282$ against $0.277$). However, despite including *PCEPI* (the series we use to validate the estimated inflation monthly growth rate) in the indicators, the factor fails to track inflation well, reporting an $R^2$ of $0.01$.
+
+Looking at the factor loadings reported in Table X, the loadings of the four-real activity indicators are all positive and different from 0, while the loadings on the four price indicators are shrunk to values very close to 0, entirely discarding the price information we added by including the new variables. 
 
 ```{r}
 # Extracting factor loadings
@@ -1675,19 +1672,26 @@ tibble(
 )
 ```
 
-When looking at the estimated parameters, the Kalman filter is indeed keeping all the loadings referring to the real economy indicators positive and with magnitude significantly higher than 0, while it's setting the loadings for the price variables very close to 0. **explain why**
+Intuitively, this is because he highest eigenvalue points in the direction of highest variance [@Jolliffe2002]. Hence, when we estimate the model via maximum likelihood, the estimator selects the factor direction that explains better the covariance in the data and, being restricted to selecting only one factor that moves in a different direction compared to the one which drives the price indicators, the estimator concentrates on the factor associated to the highest eigenvalue, hence the one associated to the group of indicators which contributes more to the overall likelihood (in our case the one of real economy). 
+
+This becomes clear when looking at the correlation matrix of the eight indicators reported in Figure X: the correlation between the groups of real economy indicators and price indicators is positive an high, while the correlation across groups is close to 0. The Kalman filter is therefore maximizing the likelihood based on the real economy indicators, which are driven by the factor corresponding to the highest eigenvalue, while absorbing the price variation into the idiosyncratic error terms.
 
 ```{r}
-th_hat <- opt_res$par
+library(ggcorrplot)
 
-# Compare estimated sigma2 across real vs price indicators
-sigma_hat <- th_hat[(n + 19):(n + 26)]
-tibble(
-  Indicator = colnames(y),
-  Group     = c(rep("Real", 4), rep("Price", 4)),
-  Sigma     = sigma_hat
-)
+R_obs <- cor(y)
+ggcorrplot(R_obs,
+           method   = "square",
+           type     = "full",
+           lab      = TRUE,
+           lab_size = 2.5,
+           colors   = c("steelblue", "white", "red3"),
+           title    = "Correlation matrix of the eight indicators") +
+  geom_hline(yintercept = 4.5, color = "grey40") +
+  geom_vline(xintercept = 4.5, color = "grey40")
 ```
+
+
 
 ## 3.3 Re-estimating with the correct specification
 
