@@ -962,13 +962,17 @@ Together, these results provide formal evidence of the consistency without effic
 
 # 3. Two-Factor Model
 
-In this chapter we are going to emprically test what happens if the number of factors in the model is misspecified. We will do so by adding variables that represent the price-side of the economy, which will generate a second factor that maps to inflation. We do this to show what happens if we blindly add variables to the model with the hope of improving performance.
+In this chapter we empirically examine how the Kalman filter behaves when the number of factors is misspecified. Specifically, we extend the original Stock & Watson framework by introducing four indicators from the price side of the economy, which are expected to share a second latent factor that tracks inflation rather than real activity. By mixing real and price indicators in a single-factor model, we deliberately misspecify the factor structure to illustrate what happens when variables are added blindly under the assumption that a larger dataset inherently yields a better fit.
 
-# 3.1 Parallel analysis
+# 3.1 Using Parallel Analysis to Determine the Number of Factors
 
-One way to check the number of factors present in a model is by using parallel analysis. Nowcasting papers mainly use the criterion suggested by Bai and Ng, which minimizes variance while giving a penalty based on the number of factors included in the model, to avoid adding too many factors. However, that criterion is consistent only for $T,N \rightarrow \infty$, and still refers to static factor models, even if it is often used to check for the number of factors in dynamic models.
+Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
 
-We will instead use parallel analysis. Horn argues that the method used by Kaiser is wrong, since in finite samples the eigenvalues of the random noise covariance matrix will not be all equal to 1 because of sampling error. Instead, he proposes a method which consist in comparing the magnitude of eigenvalues of the autocovariance matrix in the model with one factor, with a monte carlo simulation of the eigenvalues in the autocovariance matrix in a model with just the idiosyncratic error component. You keep only factors that correspond to eigenvalues significantly different from the noise-simulated ones. Since this is usually applied to static models, the idiosyncratic component is usually just white noise. In our case it will be instead follow an AR(2) with the parameters estimated via the Kalman filter.
+In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng [@BaiNg2002], which minimize unexplained variance while applying a penalty for each additional factor. However, this criteria is derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors.
+
+We therefore use parallel analysis, originally proposed by Horn [@Horn1965] to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
+
+In the standard static application, the idiosyncratic component is simulated as white noise. To better translate this to our dynamic application, we simulate noise data that follows an AR(2) process, with coefficients and variances taken from the Kalman filter estimate obtained in *Chaper 1*. This ensures that the noise benchmark takes into account the time-dependence structure of our data.
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1042,6 +1046,18 @@ for (s in 1:n_sim) {
 # Mean eigenvalues across simulations at each rank
 eig_sim <- colMeans(eig_sim_mat)
 
+# Printing the first 5 eigenvalues
+n_print <- min(5, n)
+
+eig_table <- data.frame(
+  Index     = 1:n_print,
+  Observed  = round(eig_obs[1:n_print], 4),
+  Benchmark = round(eig_sim[1:n_print], 4)
+)
+
+cat("\n--- First", n_print, "Eigenvalues ---\n")
+print(eig_table, row.names = FALSE)
+
 # Determining the number of factors
 n_factors <- sum(eig_obs > eig_sim)
 cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
@@ -1082,7 +1098,7 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
         plot.title = element_text(face = "bold", size = 13))
 ```
 
-Indeed, the plot shows only one significant factor.
+The results of parallel analysis on the original Stock and Watson model are displayed in figure X. The first eigenvalue has a magnitude of around $2.7$, well above the AR(2) noise benchmark of approximately $1.1$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.65$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
 ## 3.2 Introducing More Variables
 
