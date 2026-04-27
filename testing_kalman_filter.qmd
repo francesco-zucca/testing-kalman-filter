@@ -52,7 +52,7 @@ Where:
 -   $f_t$ is the $(1 \times 1)$ factor scalar at time $t$
 -   $e_t$ is the $(4 \times 1)$ vector of errors at time $t$
 
-Noticeably, to capture the cyclic patter of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the following graphical model:
+Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the following graphical model:
 
 ![](images/clipboard-3627855944.jpeg)
 
@@ -150,16 +150,136 @@ n <- ncol(y) # number of indicators
 varQ <- 1
 ```
 
+```{r kalman-system}
+### GENERIC KALMAN FILTER SYSTEM ###
+#
+# State vector (dim = 2K + 2n):
+#   [f1_t, f1_{t-1}, ..., fK_t, fK_{t-1}, u1_t, u1_{t-1}, ..., un_t, un_{t-1}]
+#
+# Identification: lower-triangular — factor k does not load on indicators 1..(k-1).
+#
+# Parameter layout  (nl = Kn - K(K-1)/2 free loading params):
+#   th[1 : nl]                      loadings by factor (factor 1: rows 1..n; factor k: rows k..n)
+#   th[nl+1      : nl+2K]           factor AR(2) coefficients φ_{k,1}, φ_{k,2} for k = 1..K
+#   th[nl+2K+1   : nl+2K+2n]        idiosyncratic AR(2) ψ_{i,1}, ψ_{i,2} for i = 1..n
+#   th[nl+2K+2n+1 : nl+2K+3n]       idiosyncratic SDs σ_i for i = 1..n
+
+n_lam <- function(n, K) K * n - K * (K - 1L) %/% 2L
+
+build_matrices <- function(th, n, K, varQ = 1) {
+  s_dim   <- 2L * K + 2L * n
+  nl      <- n_lam(n, K)
+  off_phi <- nl
+  off_psi <- nl + 2L * K
+  off_sig <- nl + 2L * K + 2L * n
+
+  # H matrix (n x s_dim)
+  # Loadings: lower-triangular identification — factor k free on rows k..n only
+  Lambda <- matrix(0, n, K)
+  idx    <- 1L
+  for (k in seq_len(K)) {
+    nf             <- n - k + 1L
+    Lambda[k:n, k] <- th[idx:(idx + nf - 1L)]
+    idx            <- idx + nf
+  }
+  # Factor columns: [λ_k | 0] interleaved for each k; idiosyncratic: picks u_{i,t}
+  Hmat <- cbind(
+    kronecker(Lambda, matrix(c(1, 0), nrow = 1)),
+    kronecker(diag(n), matrix(c(1, 0), nrow = 1))
+  )
+
+  # F matrix (s_dim x s_dim) — block-diagonal AR(2) companion blocks
+  Fmat <- matrix(0, s_dim, s_dim)
+  for (k in seq_len(K)) {
+    r          <- (2L*k - 1L):(2L*k)
+    Fmat[r, r] <- matrix(c(th[off_phi + 2L*(k-1L) + 1L], 1,
+                            th[off_phi + 2L*(k-1L) + 2L], 0), 2L, 2L)
+  }
+  for (i in seq_len(n)) {
+    r          <- (2L*K + 2L*i - 1L):(2L*K + 2L*i)
+    Fmat[r, r] <- matrix(c(th[off_psi + 2L*(i-1L) + 1L], 1,
+                            th[off_psi + 2L*(i-1L) + 2L], 0), 2L, 2L)
+  }
+
+  # R matrix (n x n): zero — errors absorbed into state vector
+  Rmat <- matrix(0, n, n)
+
+  # Q matrix (s_dim x s_dim)
+  sigma2 <- th[(off_sig + 1L):(off_sig + n)]^2
+  Qmat   <- diag(c(rep(c(varQ, 0), K), as.vector(rbind(sigma2, 0))))
+
+  list(Hmat = Hmat, Fmat = Fmat, Rmat = Rmat, Qmat = Qmat, s_dim = s_dim)
+}
+
+kalman <- function(th, y, n, K, TT, varQ = 1) {
+  mats  <- build_matrices(th, n, K, varQ)
+  Hmat  <- mats$Hmat;  Fmat <- mats$Fmat
+  Rmat  <- mats$Rmat;  Qmat <- mats$Qmat
+  s_dim <- mats$s_dim
+
+  h00        <- matrix(0, s_dim, 1)
+  Pmat00     <- diag(s_dim)
+  like       <- numeric(TT)
+  filter_mat <- matrix(0, TT, s_dim)
+
+  for (it in seq_len(TT)) {
+    h10      <- Fmat %*% h00
+    Pmat10   <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
+    y10      <- Hmat %*% h10
+    e10      <- matrix(y[it, ], ncol = 1) - y10
+    S10      <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat
+    like[it] <- -0.5 * (n * log(2 * pi) + log(det(S10)) +
+                          drop(t(e10) %*% solve(S10) %*% e10))
+    Kmat     <- Pmat10 %*% t(Hmat) %*% solve(S10)
+    h00      <- h10 + Kmat %*% e10
+    Pmat00   <- Pmat10 - Kmat %*% Hmat %*% Pmat10
+    filter_mat[it, ] <- t(h00)
+  }
+
+  list(neg_loglik = -sum(like), filter_mat = filter_mat, Hmat = Hmat, Fmat = Fmat)
+}
+
+ofn <- function(th, y, n, K, TT, varQ = 1) kalman(th, y, n, K, TT, varQ)$neg_loglik
+
+# Default starting values: loadings decrease with each factor, AR = 0.3, SDs from data
+make_startval <- function(y, n, K) {
+  lambda_init <- unlist(lapply(seq_len(K), function(k)
+    seq(0.9 - 0.1 * (k - 1), 0.5, length.out = n - k + 1L)
+  ))
+  c(lambda_init, rep(0.3, 2L * K), rep(0.3, 2L * n), apply(y, 2, sd))
+}
+
+# Extract factor columns from filter output (returns TT x K matrix)
+extract_factors  <- function(filter_mat, K) filter_mat[, 2L * seq_len(K) - 1L, drop = FALSE]
+
+# Extract parameter sub-vectors from estimated theta
+extract_loadings <- function(th, n, K) {
+  Lambda <- matrix(0, n, K); idx <- 1L
+  for (k in seq_len(K)) {
+    nf <- n - k + 1L; Lambda[k:n, k] <- th[idx:(idx + nf - 1L)]; idx <- idx + nf
+  }
+  Lambda
+}
+extract_psi   <- function(th, n, K) {
+  off <- n_lam(n, K) + 2L * K
+  matrix(th[(off + 1L):(off + 2L * n)], nrow = n, byrow = TRUE)
+}
+extract_sigma <- function(th, n, K) {
+  off <- n_lam(n, K) + 2L * K + 2L * n
+  th[(off + 1L):(off + n)]
+}
+```
+
 ## 1.1. Latent factor estimation
 
-Given that the model is linear and that shocks $w_t$ and $w_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is the Kalman filter [@kalman1960]. At each period $t$, the filter proceeds in two steps. In the prediction step, it forecasts the state vector $h_t$ from the previous estimate using the transition equation. In the update step, after observing $y_t$, it computes the prediction error and corrects the state estimate:
+Given that the model is linear and that shocks $w_t$ and $\epsilon_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is the Kalman filter [@kalman1960]. At each period $t$, the filter proceeds in two steps. In the prediction step, it forecasts the state vector $h_t$ from the previous estimate using the transition equation. In the update step, after observing $y_t$, it computes the prediction error and corrects the state estimate:
 
 $$\hat{h}_{t|t} = \hat{h}_{t|t-1} + K_t\, e_{t|t-1}, \qquad 
 K_t = P_{t|t-1}H^\top\!\left(HP_{t|t-1}H^\top + R\right)^{-1}$$
 
 The Kalman gain $K_t$ shrinks when observations are noisy, causing the filter to rely more heavily on its own predicton, while it grows when observations are reliable, weighting more heavily the new data and therefore the prediction error. For a full derivation, see [@hamilton1994, Ch. 13].
 
-The Kalman filter, however, requires the errors of the measurement equation $e_t$ to be independent white noise, differently from the $AR(2)$ specification of the Stock and Watson model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor. The state vector $h_{t}$ now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error and the model reduces to the following state-space system:
+The Kalman filter, however, requires the errors of the measurement equation $e_t$ to be independent white noise, unlike the $AR(2)$ specification of the Stock and Watson model. To overcome this limitation, we take the $AR(2)$ errors out of the measurement equation and include them into the latent state vector, alongside the current and lagged values of the factor. The state vector $h_{t}$ now includes the current and lagged values of both the factor and the error. With this structure, the $F$ matrix handles the $AR(2)$ dynamics of both the factor and the error and the model reduces to the following state-space system:
 
 -   The measurement equation: $y_t = H h_{t}$
 -   The factor transition equation: $h_{t} = Fh_{t-1} + v_{t}, \quad v_{t} \sim i.i.d. N(0,\sigma)$
@@ -169,195 +289,34 @@ The Kalman filter, however, requires the errors of the measurement equation $e_t
 After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
 ```{r}
-### MATRIX FUNCTION ###
+K <- 1
 
-# Function that obtains matrices given the input parameter vector 'th'
-# Note that 'th' is the vector of parameters which likelihood will be maximized by the maximum likelihood function
-# the ML function
-matrices <- function(th, n, varQ) {
-  
-  ### H: measurement matrix
-  
-  # Manually defined matrix 'h1' (used to extract the errors from the h vector)
-  h1 <- rbind(
-    c(1, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 1, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 1, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 1, 0)
-  )
-  # combine the h1 matrix to the first four coefficients (lamba 1 to 4)
-  Hmat <- cbind(th[1:n], matrix(0, nrow = n, ncol = 1), h1)
-  
-  ### F: transition matrix
-  
-  # Manually creating rows of the transition matrix
-  # phi1 and phi2
-  f1  <- c(th[n + 1], th[n + 2], 0, 0, 0, 0, 0, 0, 0, 0)
-  f2  <- c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  # psi11 and psi12
-  f3  <- c(0, 0, th[n + 3], th[n + 4], 0, 0, 0, 0, 0, 0)
-  f4  <- c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0)
-  # psi21 and psi22
-  f5  <- c(0, 0, 0, 0, th[n + 5], th[n + 6], 0, 0, 0, 0)
-  f6  <- c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0)
-  # psi31 and psi 32
-  f7  <- c(0, 0, 0, 0, 0, 0, th[n + 7], th[n + 8], 0, 0)
-  f8  <- c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0)
-  # psi41 and psi42
-  f9  <- c(0, 0, 0, 0, 0, 0, 0, 0, th[n + 9], th[n + 10])
-  f10 <- c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
-  
-  # Construct the final F matrix
-  Fmat <- rbind(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10)
-  
-  ### R: variance-covariance matrix of the observation equation idiosyncratic error w
-  
-  # In our case it's just a matrix of 0s given that the error got incorporated into 
-  # the signal vector
-  Rmat <- matrix(0, nrow = n, ncol = n)
-  
-  # Q matrix (variance-covariance matrix of state shocks)
-  # Note that the th values here represent the standard deviations of the idiosyncratic
-  # errors (w is the first one, and then epsilon 1 to 4)
-  th2_val <- kronecker(th[(n + 11):(n + 14)]^2, matrix(c(1, 0), ncol = 1))
-  # We create the final diagonal matrix (since correlation between the errors is 0)
-  Qmat <- diag(c(varQ, 0, as.vector(th2_val)))
-  
-  # Finally, put all of the matrices into a list, which will be later unpacked by the 
-  # function to compute the likelihood
-  return(list(Rmat = Rmat, Qmat = Qmat, 
-              Hmat = Hmat, Fmat = Fmat))
-}
-
-### KALMAN FILTER FUNCTION ###
-
-# Objective function for the Likelihood
-kalman <- function(th, y, n, TT, varQ) {
-  
-  # Initialization (pull matrices, set initial values, initialize vectors)
-  
-  # Get matrices
-  mats <- matrices(th, n, varQ)
-  Hmat <- mats$Hmat
-  Fmat <- mats$Fmat
-  Rmat <- mats$Rmat
-  Qmat <- mats$Qmat
-  
-  # Initial state (initial value of the signal): h_{0|0} = 0
-  h00 <- matrix(0, nrow = 10, ncol = 1) 
-  # Initial MSE (initial value of the variance): P_{0|0} = I
-  Pmat00 <- diag(10)
-  
-  # Initializing the vector to store the likelihood
-  like <- matrix(0, nrow = TT, ncol = 1)
-  
-  # Initializing the vector to store the signal
-  filter_mat <- matrix(0, nrow = TT, ncol = 10)
-  
-  # Kalman filter loop
-  
-  # for loop for each observation
-  for(it in 1:TT) {
-    
-    # Step 1: prediction of ht given info at t-1
-    h10 <- Fmat %*% h00                     
-    
-    # Step 2: prediction of Pt given info at t-1
-    Pmat10 <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
-    
-    # Step 3: prediction of yt given info at t-1
-    y10 <- Hmat %*% h10
-    
-    # Step 4: estimation of the forecast error
-    e10 <- matrix(y[it, ], ncol = 1) - y10
-    
-    # Step 5: estimation of the variance of the forecast error
-    Fmat10 <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat                  
-    
-    # Log-Likelihood Calculation (see section 2.3.4)
-    like[it] <- -0.5 * (log(2 * pi * det(Fmat10)) + (t(e10) %*% solve(Fmat10) %*% e10))
-    
-    # Step 6: Kalman gain
-    Kmat <<- Pmat10 %*% t(Hmat) %*% solve(Fmat10)
-    
-    # Step 7: updating of filter and variance
-    # filter
-    h11 <- h10 + Kmat %*% e10
-    # variance
-    Pmat11 <- Pmat10 - Kmat %*% Hmat %*% Pmat10
-    
-    # Iterating
-    filter_mat[it, ] <- t(h11)
-    h00 <- h11
-    Pmat00 <- Pmat11
-  }
-  
-  # Returning a list containing both the likelihood and the extracted matrices
-  return(list(
-    neg_loglik = -sum(like),
-    filter_mat = filter_mat,
-    Fmat = Fmat
-  ))
-}
-
-### FUNCTION THAT RETURNS ONLY THE LIKELIHOOD ###
-
-# optim() requires a function that returns only the scalar to minimize
-ofn <- function(th, y, n, TT, varQ) {
-  res <- kalman(th, y, n, TT, varQ)
-  return(res$neg_loglik)
-}
-
-### COEFFICIENT ESTIMATION ###
-
-# Initial guesses for parameters
-B <- matrix(c(0.9, 0.8, 0.7, 0.6), ncol = 1) # Loadings
-phif <- matrix(0.3, nrow = 2, ncol = 1)      # Factor AR(2) coefficients
-phiy <- matrix(0.3, nrow = n * 2, ncol = 1)  # Error AR(2) coefficients
-v <- matrix(apply(y, 2, sd), ncol = 1)       # Error variances
-
-# Vector of initial parameters
-startval <- rbind(B, phif, phiy, v)
-
-
-opt_res <- optim(par = as.vector(startval), 
-                 fn = ofn,
-                 y = y, n = n, TT = TT, varQ = varQ,
-                 method = "BFGS", 
+opt_res <- optim(par     = make_startval(y, n, K),
+                 fn      = ofn,
+                 y = y, n = n, K = K, TT = TT, varQ = varQ,
+                 method  = "BFGS",
                  hessian = TRUE,
                  control = list(maxit = 2000))
 
-# Computing standard errors
 cramerrao <- solve(opt_res$hessian)
-std_err <- sqrt(diag(cramerrao))
+std_err   <- sqrt(diag(cramerrao))
 
-### EXTRACTING THE FINAL FACTOR (Post-Estimation) ###
-
-# Running the filter again with the optimal parameters
-final_kf <- kalman(opt_res$par, y, n, TT, varQ)
-
-# Extracting the filer matrix
+final_kf   <- kalman(opt_res$par, y, n, K, TT, varQ)
 filter_mat <- final_kf$filter_mat
+factor     <- extract_factors(filter_mat, K)[, 1]
+Fmat       <- final_kf$Fmat
 
-# Extracting the factor
-factor <- filter_mat[, 1]
+### CONVERTING FACTOR TO QUARTERLY GROWTH RATE ###
 
-# Extracting Fmat for the forecast steps
-Fmat <- final_kf$Fmat 
-
-### COVERTING FACTOR TO QUARTERLY GROWTH RATE ###
-
-# Converting monthly factor into a quarterly equivalent
-factorQ <- (1/3) * factor[5:length(factor)] + 
-  (2/3) * factor[4:(length(factor) - 1)] + 
-  factor[3:(length(factor) - 2)] + 
-  (2/3) * factor[2:(length(factor) - 3)] + 
+factorQ <- (1/3) * factor[5:length(factor)] +
+  (2/3) * factor[4:(length(factor) - 1)] +
+  factor[3:(length(factor) - 2)] +
+  (2/3) * factor[2:(length(factor) - 3)] +
   (1/3) * factor[1:(length(factor) - 4)]
 
-# Extracting every 3rd month to match quarterly GDP
 i <- 1
 factgdp <- c()
-while(i < (TT - 4)) {
+while (i < (TT - 4)) {
   factgdp <- c(factgdp, factorQ[i])
   i <- i + 3
 }
@@ -463,7 +422,7 @@ Despite the violation of the normality assumption, the Kalman filter extracts a 
 
 The Kalman filter is derived under the assumption that all structural shocks follow a Gaussian distribution, which grants it the property of being the minimum variance unbiased estimator of the latent factor. When this assumption is violated, the filter estimated via Gaussian quasi-maximum likelihood remains consistent, meaning the estimated parameters still converge to their true values as $T \rightarrow \infty$, but **loses efficiency in finite samples**.
 
-The reason for this is that under a misspecified likelihood, the Kalman gain is no longer optimal; therefore, the filter requires more observations to achieve the same precision as it would under correctly specified Gaussian shocks. This efficiency loss is particularly relevant for macroeconomic data, which with fewer than 700 observations can never be confidently characterized as truly Gaussian, and empirically exhibits heavy tailed behavior consistent with a student-t distribution [@geweke1993]. We evaluate this by simulating the S&W data generating process under three distributional assumptions of increasing complexity: Gaussian, student-t, and skew-t, the latter of which introduces nonzero skewness via a slant parameter $\alpha \neq 0$.
+The reason for this is that under a misspecified likelihood, the Kalman gain is no longer optimal; therefore, the filter requires more observations to achieve the same precision as it would under correctly specified Gaussian shocks. This efficiency loss is particularly relevant for macroeconomic data, which, with fewer than 700 observations, can never be confidently characterized as truly Gaussian, and empirically exhibits heavy-tailed behavior consistent with a student-t distribution [@geweke1993]. We evaluate this by simulating the S&W data generating process under three distributional assumptions of increasing complexity: Gaussian, student-t, and skew-t, the latter of which introduces nonzero skewness via a slant parameter $\alpha \neq 0$.
 
 ## 2.1 Gaussian Distribution {#gaussian-dist}
 
@@ -495,11 +454,7 @@ Y_normal <- f_true %*% t(lambda) + matrix(rnorm(tt*4), tt, 4)
 Y_normal <- scale(Y_normal)
 
 # run kalman
-final_sim <- kalman(opt_res$par, 
-                    Y_normal, 
-                    n = 4, 
-                    TT = tt, 
-                    varQ)
+final_sim <- kalman(opt_res$par, Y_normal, n = 4, K = 1, TT = tt, varQ)
 
 f_hat <- final_sim$filter_mat[, 1]
 
@@ -608,11 +563,7 @@ Y_normal <- f_true %*% t(lambda) + matrix(rt(tt*4, df=5) / sqrt(5/3),
 Y_normal <- scale(Y_normal)
 
 # run kalman
-final_sim <- kalman(opt_res$par, 
-                    Y_normal, 
-                    n = 4, 
-                    TT = nrow(Y_normal), 
-                    varQ)
+final_sim <- kalman(opt_res$par, Y_normal, n = 4, K = 1, TT = nrow(Y_normal), varQ)
 f_hat <- final_sim$filter_mat[, 1]
 
 # results
@@ -679,7 +630,7 @@ ggsave(filename = "images/student_t_plot.png",
 
 As illustrated in @fig-student-t, the Kalman filter remains consistent under student-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with the Gaussian baseline from @gaussian-dist.
 
-However, the trajectory is notably more volatile across sample sizes, particularly in the finite sample realm where the correlation fluctuates significantly before stabilizing. This is consistent with the theoretical prediction that the Kalman filter loses efficiency under heavy tailed distributions, as the misspecified Gaussian likelihood produces a suboptimal Kalman gain that requires more observations to average out the influence of extreme draws.
+However, the trajectory is notably more volatile across sample sizes, particularly in the finite sample realm where the correlation fluctuates significantly before stabilizing. This is consistent with the theoretical prediction that the Kalman filter loses efficiency under heavy-tailed distributions, as the misspecified Gaussian likelihood produces a suboptimal Kalman gain that requires more observations to average out the influence of extreme draws.
 
 In other words, the fat tails of the student-t distribution introduce large idiosyncratic shocks that the filter struggles to separate from the common factor signal at small $T$, resulting in noisier factor recovery relative to the Gaussian case.
 
@@ -727,11 +678,7 @@ Y_normal <- f_true %*% t(lambda) + matrix(shocks, tt, 4)
 Y_normal <- scale(Y_normal)
 
 # run kalman
-final_sim <- kalman(opt_res$par, 
-                    Y_normal, 
-                    n = 4, 
-                    TT = nrow(Y_normal), 
-                    varQ)
+final_sim <- kalman(opt_res$par, Y_normal, n = 4, K = 1, TT = nrow(Y_normal), varQ)
 f_hat <- final_sim$filter_mat[, 1]
 
 cor(f_hat, f_true)
@@ -944,22 +891,15 @@ In nowcasting applications, the optimal number of factors is typically determine
 
 We therefore use parallel analysis, originally proposed by Horn [@Horn1965] to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
 
-In the standard static application, the idiosyncratic component is simulated as white noise. To better translate this to our dynamic application, we simulate noise data that follows an AR(2) process, with coefficients and variances taken from the Kalman filter estimate obtained in *Chaper 1*. This ensures that the noise benchmark takes into account the time-dependence structure of our data.
+In the standard static application, the idiosyncratic component is simulated as white noise. To better translate this to our dynamic application, we simulate noise data that follows an AR(2) process, with coefficients and variances taken from the Kalman filter estimate obtained in *Chapter 1*. This ensures that the noise benchmark takes into account the time-dependence structure of our data.
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
 
 library(psych)
 
-# Extracting the estimated coefficient
-th <- opt_res$par
-
-# Extracting the idiosyncratic AR(2) coefficients for each indicator
-psi_hat <- matrix(th[(7):(14)], nrow = n, ncol = 2, byrow = TRUE)
-
-# Extracting the variance for each indicator
-sigma_hat <- th[(15):(18)]
-sigma2_hat <- sigma_hat^2
+psi_hat    <- extract_psi(opt_res$par, n, K)
+sigma2_hat <- extract_sigma(opt_res$par, n, K)^2
 
 # COMPUTING THE EIGENVALUES OF THE FRED DATA
 
@@ -1190,206 +1130,34 @@ varQ <- 1
 ```
 
 ```{r}
-### MATRIX FUNCTION ###
+K <- 1
 
-# Function that obtains matrices given the input parameter vector 'th'
-# Note that 'th' is the vector of parameters which likelihood will be maximized by the maximum likelihood function
-# the ML function
-matrices <- function(th, n, varQ) {
-  
-  ### H: measurement matrix
-  
-  # Manually defined matrix 'h1' (used to extract the errors from the h vector)
-  h1 <- rbind(
-    c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
-  )
-  # combine the h1 matrix to the first four coefficients (lamba 1 to 4)
-  Hmat <- cbind(th[1:n], matrix(0, nrow = n, ncol = 1), h1)
-  
-  ### F: transition matrix
-  
-  # Manually creating rows of the transition matrix
-  # phi1 and phi2
-  f1  <- c(th[n + 1], th[n + 2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  f2  <- c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  # psi11 and psi12
-  f3  <- c(0, 0, th[n + 3], th[n + 4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  f4  <- c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  # psi21 and psi22
-  f5  <- c(0, 0, 0, 0, th[n + 5], th[n + 6], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  f6  <- c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  # psi31 and psi32
-  f7  <- c(0, 0, 0, 0, 0, 0, th[n + 7], th[n + 8], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  f8  <- c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  # psi41 and psi42
-  f9  <- c(0, 0, 0, 0, 0, 0, 0, 0, th[n + 9], th[n + 10], 0, 0, 0, 0, 0, 0, 0, 0)
-  f10 <- c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  # psi51 and psi52
-  f11 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, th[n + 11], th[n + 12], 0, 0, 0, 0, 0, 0)
-  f12 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)
-  # psi61 and psi62
-  f13 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, th[n + 13], th[n + 14], 0, 0, 0, 0)
-  f14 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0)
-  # psi71 and psi72
-  f15 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, th[n + 15], th[n + 16], 0, 0)
-  f16 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0)
-  # psi81 and psi82
-  f17 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, th[n + 17], th[n + 18])
-  f18 <- c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
-  
-  # Construct the final F matrix
-  Fmat <- rbind(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10,
-                f11, f12, f13, f14, f15, f16, f17, f18)
-  
-  ### R: variance-covariance matrix of observation equation idiosyncratic error
-  Rmat <- matrix(0, nrow = n, ncol = n)
-  
-  ### Q: variance-covariance matrix of state shocks
-  th2_val <- kronecker(th[(n + 19):(n + 26)]^2, matrix(c(1, 0), ncol = 1))
-  Qmat <- diag(c(varQ, 0, as.vector(th2_val)))
-  
-  return(list(Rmat = Rmat, Qmat = Qmat, 
-              Hmat = Hmat, Fmat = Fmat))
-}
-```
-
-```{r}
-### KALMAN FILTER FUNCTION ###
-
-# Objective function for the Likelihood
-kalman <- function(th, y, n, TT, varQ) {
-  
-  # Initialization (pull matrices, set initial values, initialize vectors)
-  
-  # Get matrices
-  mats <- matrices(th, n, varQ)
-  Hmat <- mats$Hmat
-  Fmat <- mats$Fmat
-  Rmat <- mats$Rmat
-  Qmat <- mats$Qmat
-  
-  # Initial state (initial value of the signal): h_{0|0} = 0
-  h00 <- matrix(0, nrow = 18, ncol = 1) 
-  # Initial MSE (initial value of the variance): P_{0|0} = I
-  Pmat00 <- diag(18)
-  
-  # Initializing the vector to store the likelihood
-  like <- matrix(0, nrow = TT, ncol = 1)
-  
-  # Initializing the vector to store the signal
-  filter_mat <- matrix(0, nrow = TT, ncol = 18)
-  
-  # Kalman filter loop
-  
-  # for loop for each observation
-  for(it in 1:TT) {
-    
-    # Step 1: prediction of ht given info at t-1
-    h10 <- Fmat %*% h00                     
-    
-    # Step 2: prediction of Pt given info at t-1
-    Pmat10 <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
-    
-    # Step 3: prediction of yt given info at t-1
-    y10 <- Hmat %*% h10
-    
-    # Step 4: estimation of the forecast error
-    e10 <- matrix(y[it, ], ncol = 1) - y10
-    
-    # Step 5: estimation of the variance of the forecast error
-    Fmat10 <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat
-    
-    # Log-Likelihood Calculation (see section 2.3.4)
-    like[it] <- -0.5 * (log(2 * pi * det(Fmat10)) + (t(e10) %*% solve(Fmat10) %*% e10))
-    
-    # Step 6: Kalman gain
-    Kmat <<- Pmat10 %*% t(Hmat) %*% solve(Fmat10)
-    
-    # Step 7: updating of filter and variance
-    # filter
-    h11 <- h10 + Kmat %*% e10
-    # variance
-    Pmat11 <- Pmat10 - Kmat %*% Hmat %*% Pmat10
-    
-    # Iterating
-    filter_mat[it, ] <- t(h11)
-    h00 <- h11
-    Pmat00 <- Pmat11
-  }
-  
-  # Returning a list containing both the likelihood and the extracted matrices
-  return(list(
-    neg_loglik = -sum(like),
-    filter_mat = filter_mat,
-    Fmat = Fmat
-  ))
-}
-
-### FUNCTION THAT RETURNS ONLY THE LIKELIHOOD ###
-
-# optim() requires a function that returns only the scalar to minimize
-ofn <- function(th, y, n, TT, varQ) {
-  res <- kalman(th, y, n, TT, varQ)
-  return(res$neg_loglik)
-}
-
-### COEFFICIENT ESTIMATION ###
-
-# Initial guesses for parameters
-B <- matrix(c(0.9, 0.8, 0.7, 0.6, 0.5, 0.5, 0.5, 0.5), ncol = 1) # Loadings
-phif <- matrix(0.3, nrow = 2, ncol = 1)       # Factor AR(2) coefficients
-phiy <- matrix(0.3, nrow = n * 2, ncol = 1)   # Error AR(2) coefficients
-v <- matrix(apply(y, 2, sd), ncol = 1)        # Error variances
-
-# Vector of initial parameters
-startval <- rbind(B, phif, phiy, v)
-
-# run once, save
-opt_res <- optim(par = as.vector(startval), 
-                 fn = ofn,
-                 y = y, n = n, TT = TT, varQ = varQ,
-                 method = "BFGS", 
+opt_res <- optim(par     = make_startval(y, n, K),
+                 fn      = ofn,
+                 y = y, n = n, K = K, TT = TT, varQ = varQ,
+                 method  = "BFGS",
                  hessian = TRUE,
                  control = list(maxit = 2000))
 
-# Computing standard errors
 cramerrao <- solve(opt_res$hessian)
-std_err <- sqrt(diag(cramerrao))
+std_err   <- sqrt(diag(cramerrao))
 
-### EXTRACTING THE FINAL FACTOR (Post-Estimation) ###
-
-# Running the filter again with the optimal parameters
-final_kf <- kalman(opt_res$par, y, n, TT, varQ)
-
-# Extracting the filer matrix
+final_kf   <- kalman(opt_res$par, y, n, K, TT, varQ)
 filter_mat <- final_kf$filter_mat
+factor     <- extract_factors(filter_mat, K)[, 1]
+Fmat       <- final_kf$Fmat
 
-# Extracting the factor
-factor <- filter_mat[, 1]
+### CONVERTING FACTOR TO QUARTERLY GROWTH RATE ###
 
-# Extracting Fmat for the forecast steps
-Fmat <- final_kf$Fmat 
-
-### COVERTING FACTOR TO QUARTERLY GROWTH RATE ###
-
-# Converting monthly factor into a quarterly equivalent
-factorQ <- (1/3) * factor[5:length(factor)] + 
-  (2/3) * factor[4:(length(factor) - 1)] + 
-  factor[3:(length(factor) - 2)] + 
-  (2/3) * factor[2:(length(factor) - 3)] + 
+factorQ <- (1/3) * factor[5:length(factor)] +
+  (2/3) * factor[4:(length(factor) - 1)] +
+  factor[3:(length(factor) - 2)] +
+  (2/3) * factor[2:(length(factor) - 3)] +
   (1/3) * factor[1:(length(factor) - 4)]
 
-# Extracting every 3rd month to match quarterly GDP
 i <- 1
 factgdp <- c()
-while(i <= (TT - 4)) {
+while (i <= (TT - 4)) {
   factgdp <- c(factgdp, factorQ[i])
   i <- i + 3
 }
@@ -1400,15 +1168,8 @@ while(i <= (TT - 4)) {
 
 library(psych)
 
-# Extracting the estimated coefficient
-th <- opt_res$par
-
-# Extracting the idiosyncratic AR(2) coefficients for each indicator
-psi_hat <- matrix(th[(n + 3):(n + 18)], nrow = n, ncol = 2, byrow = TRUE)
-
-# Extracting the variance for each indicator
-sigma_hat  <- th[(n + 19):(n + 26)]
-sigma2_hat <- sigma_hat^2
+psi_hat    <- extract_psi(opt_res$par, n, K)
+sigma2_hat <- extract_sigma(opt_res$par, n, K)^2
 
 # COMPUTING THE EIGENVALUES OF THE FRED DATA
 
@@ -1637,7 +1398,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
 
 As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit for actual GDP growth remains strong, with an $R^2$ of $0.759$ and an MSE of $0.282$, only marginally worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.277$. However, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.01$ against monthly *PCEPI* growth.
 
-The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ to $0.90$, while the dour price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely. 
+The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ and $0.90$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely. 
 
 ```{r}
 # Extracting factor loadings
@@ -1648,7 +1409,8 @@ tibble(
   Lambda    = lambda_hat
 )
 ```
-This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in Figure X, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.73$, and the ones in the price group range from $0.23$ to $0.92$. however, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
+
+This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in Figure X, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.73$, and the ones in the price group range from $0.23$ to $0.92$. However, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
 
 ```{r}
 library(ggcorrplot)
@@ -1667,7 +1429,7 @@ ggcorrplot(R_obs,
         axis.text.y = element_text(size = 8))
 ```
 
-When estimating a single-factor model via maximum likelihood, the Kalman filter commits to the direction associated to the highest eigenvalue. Hence, the likelihood is maximized by estimating the latent factor that drives the real-activity indicators, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idosyncratic error terms.
+When estimating a single-factor model via maximum likelihood, the Kalman filter commits to the direction associated to the highest eigenvalue. Hence, the likelihood is maximized by estimating the latent factor that drives the real-activity indicators, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idiosyncratic error terms.
 
 ## 3.3. Re-estimating with the correct specification
 
@@ -1722,159 +1484,37 @@ TT    <- nrow(y)
 varQ  <- 1
 
 
-### MATRIX FUNCTION ###
+K <- 2
 
-# State vector (dim = 4 + 2n = 20):
-# [f1_t, f1_{t-1}, f2_t, f2_{t-1}, u1_t, u1_{t-1}, ..., u8_t, u8_{t-1}]
-#
-# Parameter layout (43 total for n = 8):
-#   th[1:n]            → λ1 (factor 1 loadings, all n indicators)
-#   th[(n+1):(2n-1)]   → λ2 (factor 2 loadings, indicators 2:n; λ2_1 = 0 fixed)
-#   th[2n],  th[2n+1]  → φ1_1, φ1_2 (factor 1 AR2)
-#   th[2n+2],th[2n+3]  → φ2_1, φ2_2 (factor 2 AR2)
-#   th[(2n+4):(4n+3)]  → ψ_i1, ψ_i2 for i=1..n (idiosyncratic AR2)
-#   th[(4n+4):(5n+3)]  → σ_1..σ_n (idiosyncratic SDs)
+# For K=2 informed starting loadings are important for convergence:
+# factor 1 loads heavily on real indicators (1-4), factor 2 on price (5-8)
+lambda1_init <- c(0.9, 0.8, 0.7, 0.6, 0.1, 0.1, 0.1, 0.1)  # rows 1..n for factor 1
+lambda2_init <- c(0.1, 0.1, 0.1, 0.6, 0.7, 0.8, 0.9)         # rows 2..n for factor 2
 
-matrices <- function(th, n, varQ) {
+startval <- c(lambda1_init, lambda2_init,
+              rep(0.3, 2 * K),   # factor AR(2) coefficients
+              rep(0.3, 2 * n),   # idiosyncratic AR(2) coefficients
+              apply(y, 2, sd))   # idiosyncratic SDs
 
-  ### H: measurement matrix (n × 20)
-
-  # h1 extracts u_{i,t} from the idiosyncratic part of the state vector
-  h1 <- rbind(
-    c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0),
-    c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
-  )
-
-  # Lower-triangular identification: fix λ2_1 = 0 so factor 2 doesn't load on INDPRO
-  # This is the minimal restriction needed to pin down factor rotation
-  lambda2 <- c(0, th[(n + 1):(2 * n - 1)])
-
-  # H = [λ1 | 0 | λ2 | 0 | h1]
-  Hmat <- cbind(th[1:n], matrix(0, n, 1), lambda2, matrix(0, n, 1), h1)
-
-  ### F: transition matrix (20 × 20)
-
-  # Factor 1 AR(2): rows 1–2
-  f1  <- c(th[2*n],     th[2*n+1],  0,           0,          rep(0, 16))
-  f2  <- c(1,           0,           0,           0,          rep(0, 16))
-  # Factor 2 AR(2): rows 3–4
-  f3  <- c(0,           0,           th[2*n+2],  th[2*n+3],  rep(0, 16))
-  f4  <- c(0,           0,           1,           0,          rep(0, 16))
-  # Idiosyncratic AR(2) for each indicator: rows 5–20
-  f5  <- c(rep(0, 4),  th[2*n+4],  th[2*n+5],  rep(0, 14))
-  f6  <- c(rep(0, 4),  1,           0,           rep(0, 14))
-  f7  <- c(rep(0, 6),  th[2*n+6],  th[2*n+7],  rep(0, 12))
-  f8  <- c(rep(0, 6),  1,           0,           rep(0, 12))
-  f9  <- c(rep(0, 8),  th[2*n+8],  th[2*n+9],  rep(0, 10))
-  f10 <- c(rep(0, 8),  1,           0,           rep(0, 10))
-  f11 <- c(rep(0, 10), th[2*n+10], th[2*n+11], rep(0, 8))
-  f12 <- c(rep(0, 10), 1,           0,           rep(0, 8))
-  f13 <- c(rep(0, 12), th[2*n+12], th[2*n+13], rep(0, 6))
-  f14 <- c(rep(0, 12), 1,           0,           rep(0, 6))
-  f15 <- c(rep(0, 14), th[2*n+14], th[2*n+15], rep(0, 4))
-  f16 <- c(rep(0, 14), 1,           0,           rep(0, 4))
-  f17 <- c(rep(0, 16), th[2*n+16], th[2*n+17], rep(0, 2))
-  f18 <- c(rep(0, 16), 1,           0,           rep(0, 2))
-  f19 <- c(rep(0, 18), th[2*n+18], th[2*n+19])
-  f20 <- c(rep(0, 18), 1,           0)
-
-  Fmat <- rbind(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10,
-                f11, f12, f13, f14, f15, f16, f17, f18, f19, f20)
-
-  ### R: zero (errors absorbed into state vector)
-  Rmat <- matrix(0, n, n)
-
-  ### Q: state shock variances (20 × 20 diagonal)
-  # Both factor variances normalized to varQ = 1 for identification
-  th2_val <- kronecker(th[(4*n+4):(5*n+3)]^2, matrix(c(1, 0), ncol = 1))
-  Qmat    <- diag(c(varQ, 0, varQ, 0, as.vector(th2_val)))
-
-  return(list(Rmat = Rmat, Qmat = Qmat, Hmat = Hmat, Fmat = Fmat))
-}
-
-
-### KALMAN FILTER FUNCTION ###
-
-kalman <- function(th, y, n, TT, varQ) {
-
-  mats   <- matrices(th, n, varQ)
-  Hmat   <- mats$Hmat
-  Fmat   <- mats$Fmat
-  Rmat   <- mats$Rmat
-  Qmat   <- mats$Qmat
-
-  # State dimension is now 4 + 2n = 20
-  h00        <- matrix(0, nrow = 4 + 2 * n, ncol = 1)
-  Pmat00     <- diag(4 + 2 * n)
-  like       <- matrix(0, nrow = TT, ncol = 1)
-  filter_mat <- matrix(0, nrow = TT, ncol = 4 + 2 * n)
-
-  for (it in 1:TT) {
-    h10     <- Fmat %*% h00
-    Pmat10  <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
-    y10     <- Hmat %*% h10
-    e10     <- matrix(y[it, ], ncol = 1) - y10
-    Fmat10  <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat
-    like[it] <- -0.5 * (log(2 * pi * det(Fmat10)) + t(e10) %*% solve(Fmat10) %*% e10)
-    Kmat    <- Pmat10 %*% t(Hmat) %*% solve(Fmat10)
-    h11     <- h10 + Kmat %*% e10
-    Pmat11  <- Pmat10 - Kmat %*% Hmat %*% Pmat10
-    filter_mat[it, ] <- t(h11)
-    h00     <- h11
-    Pmat00  <- Pmat11
-  }
-
-  return(list(neg_loglik = -sum(like), filter_mat = filter_mat, Fmat = Fmat))
-}
-
-ofn <- function(th, y, n, TT, varQ) kalman(th, y, n, TT, varQ)$neg_loglik
-
-
-### COEFFICIENT ESTIMATION ###
-
-# Factor 1 loadings: higher for real indicators (1-4), lower for price (5-8)
-B1    <- matrix(c(0.9, 0.8, 0.7, 0.6, 0.1, 0.1, 0.1, 0.1), ncol = 1)
-# Factor 2 loadings (n-1 = 7): lower for real (2-4), higher for price (5-8)
-# Note: λ2_1 is fixed to 0 inside matrices(), so we only pass λ2_2..λ2_8
-B2    <- matrix(c(0.1, 0.1, 0.1, 0.6, 0.7, 0.8, 0.9), ncol = 1)
-phif1 <- matrix(0.3, nrow = 2, ncol = 1)       # factor 1 AR(2)
-phif2 <- matrix(0.3, nrow = 2, ncol = 1)       # factor 2 AR(2)
-phiy  <- matrix(0.3, nrow = n * 2, ncol = 1)  # idiosyncratic AR(2) — 16 params
-v     <- matrix(apply(y, 2, sd), ncol = 1)    # idiosyncratic SDs — 8 params
-
-startval <- rbind(B1, B2, phif1, phif2, phiy, v)  # 43 params total
-
-opt_res <- optim(par     = as.vector(startval),
-                   fn      = ofn,
-                   y = y, n = n, TT = TT, varQ = varQ,
-                   method  = "BFGS",
-                   hessian = TRUE,
-                   control = list(maxit = 2000))
+opt_res <- optim(par     = startval,
+                 fn      = ofn,
+                 y = y, n = n, K = K, TT = TT, varQ = varQ,
+                 method  = "BFGS",
+                 hessian = TRUE,
+                 control = list(maxit = 2000))
 
 cramerrao <- solve(opt_res$hessian)
 std_err   <- sqrt(diag(cramerrao))
 
+final_kf     <- kalman(opt_res$par, y, n, K, TT, varQ)
+filter_mat   <- final_kf$filter_mat
+Fmat         <- final_kf$Fmat
 
-### EXTRACTING BOTH FACTORS (Post-Estimation) ###
+factors      <- extract_factors(filter_mat, K)
+factor_real  <- factors[, 1]
+factor_price <- factors[, 2]
 
-final_kf   <- kalman(opt_res$par, y, n, TT, varQ)
-filter_mat <- final_kf$filter_mat
-Fmat       <- final_kf$Fmat
-
-# Factor 1 (real activity): column 1 of state vector → f1_t
-factor_real  <- filter_mat[, 1]
-
-# Factor 2 (price): column 3 of state vector → f2_t
-factor_price <- filter_mat[, 3]
-
-
-### CONVERTING REAL FACTOR TO QUARTERLY GROWTH RATE (for GDP mapping) ###
+### CONVERTING REAL FACTOR TO QUARTERLY GROWTH RATE ###
 
 factorQ <- (1/3) * factor_real[5:length(factor_real)] +
            (2/3) * factor_real[4:(length(factor_real) - 1)] +
@@ -2007,14 +1647,9 @@ Looking at the loading estimates reported in Table X, *factor 1* indeed loads he
 ```{r}
 ### EXTRACTING FACTOR LOADINGS ###
 
-th <- opt_res$par
-
-# Factor 1 loadings: λ1_1 ... λ1_8 (one per indicator)
-lambda1 <- th[1:n]
-
-# Factor 2 loadings: λ2_1 is fixed to 0 (identification restriction),
-# so prepend it manually before the estimated λ2_2 ... λ2_8
-lambda2 <- c(0, th[(n + 1):(2 * n - 1)])
+Lambda  <- extract_loadings(opt_res$par, n, K)
+lambda1 <- Lambda[, 1]
+lambda2 <- Lambda[, 2]
 
 # Combine into a readable table
 indicator_names <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1",
