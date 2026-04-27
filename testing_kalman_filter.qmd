@@ -195,43 +195,54 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
   # Starting the matrix
   Fmat <- matrix(0, h_dim, h_dim)
 
-  # Factor rows (2 rows per factor)
+  # Factor rows (2 rows per factor, filling rows one by one)
   for (j in 1:r) {
-
-    # Filling the rows one by one
-    
     # Phi_1 entry (odd row, odd column)
     Fmat[(2 * j - 1), (2 * j - 1)] <- th[off_phi + 2 * (j - 1) + 1]
     # Phi_2 entry (odd row, even column)
     Fmat[(2 * j - 1), (2 * j)] <- th[off_phi + 2 * (j - 1) + 2]
-    # Phi_3 entry (even row, odd column)
-    Fmat[(2 * j), (2 * j - 1)] <- 1 # pass-through
+    # 1 entry (even row, odd column)
+    Fmat[(2 * j), (2 * j - 1)] <- 1 
   }
 
-# Idiosyncratic rows (2 rows per series)
-for (i in seq_len(n)) {
-  ar_row  <- 2*K + 2*i - 1
-  lag_row <- 2*K + 2*i
+  # Idiosyncratic rows (2 rows per series)
+  for (i in seq_len(n)) {
+    # Psi_1 entry (odd row, odd column)
+    Fmat[(2 * i - 1), (2 * i - 1)]  <- th[off_psi + 2 * (i - 1) + 1]
+    # Psi_2 entry (odd row, even column)
+    Fmat[(2 * i - 1), (2 * i)] <- th[off_psi + 2 * (i - 1) + 2]
+    # 1 entry (even row, odd column)
+    Fmat[(2 * i), (2 * i - 1)] <- 1
+  }
 
-  Fmat[ar_row, ar_row]  <- th[off_psi + 2*(i-1) + 1]  # ψ₁
-  Fmat[ar_row, lag_row] <- th[off_psi + 2*(i-1) + 2]  # ψ₂
-  Fmat[lag_row, ar_row] <- 1
-}
-
-  # R matrix (n x n): zero — errors absorbed into state vector
+  # R MATRIX #
+  
+  # R is an (n x n) matrix of zeroes
   Rmat <- matrix(0, n, n)
+  
+  # Q MATRIX #
+  
+  # Calculating offset of parameters in the theta vector
+  off_sig <- n_lam + (2 * r) + (2 * n) 
+  
+  # Auxiliary vector of (VarQ 0) for each factor
+  varQ_auxvec <- c(rep(c(varQ, 0), r))
+  # Calculating the variance of each noise
+  sigma2 <- th[(off_sig + 1):(off_sig + n)]^2
+  # Auxiliary vector of (sigma2 0) for each error
+  sigma2_auxvec <- as.vector(rbind(sigma2, 0))
+  
+  # Variance matrix
+  Qmat <- diag(c(varQ_auxvec, sigma2_auxvec))
 
-  # Q matrix (s_dim x s_dim)
-  sigma2 <- th[(off_sig + 1L):(off_sig + n)]^2
-  Qmat   <- diag(c(rep(c(varQ, 0), K), as.vector(rbind(sigma2, 0))))
-
-  list(Hmat = Hmat, Fmat = Fmat, Rmat = Rmat, Qmat = Qmat, s_dim = s_dim)
+  # RETURNING LIST OF MATRICES #
+  list(Hmat = Hmat, Fmat = Fmat, Rmat = Rmat, Qmat = Qmat)
 }
 
 ### KALMAN LOOP ###
 
-kalman <- function(th, y, n, K, TT, varQ = 1) {
-  mats  <- build_matrices(th, n, K, varQ)
+kalman <- function(th, y, n, r, TT, varQ = 1) {
+  mats  <- matrices(th, n, K, varQ)
   Hmat  <- mats$Hmat;  Fmat <- mats$Fmat
   Rmat  <- mats$Rmat;  Qmat <- mats$Qmat
   s_dim <- mats$s_dim
