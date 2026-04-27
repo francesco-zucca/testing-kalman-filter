@@ -143,63 +143,80 @@ y_raw <- df_clean %>%
 # demeaning the y time series and standardizing it
 y <- scale(y_raw)
 
-TT <- nrow(y) # number of observations
-n <- ncol(y) # number of indicators
+
 
 # normalizing the variance of w to 1
 varQ <- 1
 ```
 
 ```{r kalman-system}
-### GENERIC KALMAN FILTER SYSTEM ###
-#
-# State vector (dim = 2K + 2n):
-#   [f1_t, f1_{t-1}, ..., fK_t, fK_{t-1}, u1_t, u1_{t-1}, ..., un_t, un_{t-1}]
-#
-# Identification: lower-triangular — factor k does not load on indicators 1..(k-1).
-#
-# Parameter layout  (nl = Kn - K(K-1)/2 free loading params):
-#   th[1 : nl]                      loadings by factor (factor 1: rows 1..n; factor k: rows k..n)
-#   th[nl+1      : nl+2K]           factor AR(2) coefficients φ_{k,1}, φ_{k,2} for k = 1..K
-#   th[nl+2K+1   : nl+2K+2n]        idiosyncratic AR(2) ψ_{i,1}, ψ_{i,2} for i = 1..n
-#   th[nl+2K+2n+1 : nl+2K+3n]       idiosyncratic SDs σ_i for i = 1..n
+### SETUP ###
 
-n_lam <- function(n, K) K * n - K * (K - 1L) %/% 2L
+TT <- nrow(y)                # Number of observations
+n <- ncol(y)                 # Number of indicators
+r <- 1                       # Number of factors (set manually)
+h_dim   <- (2 * r) + (2 * n) # State vector dimensions
+n_lam <- function(r, K) {    # Number of loadings
+  K * n - K * (K - 1) / 2
+}
 
-build_matrices <- function(th, n, K, varQ = 1) {
-  s_dim   <- 2L * K + 2L * n
-  nl      <- n_lam(n, K)
-  off_phi <- nl
-  off_psi <- nl + 2L * K
-  off_sig <- nl + 2L * K + 2L * n
+### MATRIX FUNCTION ###
 
-  # H matrix (n x s_dim)
-  # Loadings: lower-triangular identification — factor k free on rows k..n only
-  Lambda <- matrix(0, n, K)
-  idx    <- 1L
-  for (k in seq_len(K)) {
-    nf             <- n - k + 1L
-    Lambda[k:n, k] <- th[idx:(idx + nf - 1L)]
-    idx            <- idx + nf
+matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
+
+  # H MATRIX #
+  
+  # Factor loading block (leftside block)
+  # Starting the block
+  lambda <- matrix(0, n, 2 * r)
+  # Index for theta
+  idx <- 1
+  # Building the block
+  for (j in 1:r) {
+    # Number of free loadings
+    nf <- n - j + 1
+    # Filling odd columns with loadings
+    Lambda[j:n, (2 * j - 1)] <- th[idx:(idx + nf - 1)]
+    idx <- idx + nf
   }
-  # Factor columns: [λ_k | 0] interleaved for each k; idiosyncratic: picks u_{i,t}
-  Hmat <- cbind(
-    kronecker(Lambda, matrix(c(1, 0), nrow = 1)),
-    kronecker(diag(n), matrix(c(1, 0), nrow = 1))
-  )
+  
+  # (1 0) rightside block
+  H_aux <- kronecker(diag(n), matrix(c(1, 0), nrow = 1))
+                     
+  # Final H matrix
+  Hmat <- cbind(lambda, H_aux)
 
-  # F matrix (s_dim x s_dim) — block-diagonal AR(2) companion blocks
-  Fmat <- matrix(0, s_dim, s_dim)
-  for (k in seq_len(K)) {
-    r          <- (2L*k - 1L):(2L*k)
-    Fmat[r, r] <- matrix(c(th[off_phi + 2L*(k-1L) + 1L], 1,
-                            th[off_phi + 2L*(k-1L) + 2L], 0), 2L, 2L)
+  # F MATRIX #
+  
+  # Calculating offset of parameters in the theta vector
+  off_phi <- n_lam
+  off_psi <- n_lam + (2 * r) 
+  
+  # Starting the matrix
+  Fmat <- matrix(0, h_dim, h_dim)
+
+  # Factor rows (2 rows per factor)
+  for (j in 1:r) {
+
+    # Filling the rows one by one
+    
+    # Phi_1 entry (odd row, odd column)
+    Fmat[(2 * j - 1), (2 * j - 1)] <- th[off_phi + 2 * (j - 1) + 1]
+    # Phi_2 entry (odd row, even column)
+    Fmat[(2 * j - 1), (2 * j)] <- th[off_phi + 2 * (j - 1) + 2]
+    # Phi_3 entry (even row, odd column)
+    Fmat[(2 * j), (2 * j - 1)] <- 1 # pass-through
   }
-  for (i in seq_len(n)) {
-    r          <- (2L*K + 2L*i - 1L):(2L*K + 2L*i)
-    Fmat[r, r] <- matrix(c(th[off_psi + 2L*(i-1L) + 1L], 1,
-                            th[off_psi + 2L*(i-1L) + 2L], 0), 2L, 2L)
-  }
+
+# Idiosyncratic rows (2 rows per series)
+for (i in seq_len(n)) {
+  ar_row  <- 2*K + 2*i - 1
+  lag_row <- 2*K + 2*i
+
+  Fmat[ar_row, ar_row]  <- th[off_psi + 2*(i-1) + 1]  # ψ₁
+  Fmat[ar_row, lag_row] <- th[off_psi + 2*(i-1) + 2]  # ψ₂
+  Fmat[lag_row, ar_row] <- 1
+}
 
   # R matrix (n x n): zero — errors absorbed into state vector
   Rmat <- matrix(0, n, n)
@@ -210,6 +227,8 @@ build_matrices <- function(th, n, K, varQ = 1) {
 
   list(Hmat = Hmat, Fmat = Fmat, Rmat = Rmat, Qmat = Qmat, s_dim = s_dim)
 }
+
+### KALMAN LOOP ###
 
 kalman <- function(th, y, n, K, TT, varQ = 1) {
   mats  <- build_matrices(th, n, K, varQ)
