@@ -67,100 +67,12 @@ $$y_t \perp\!\!\!\perp \{y_s\}_{s \neq t} \mid h_{t}$$
 Where:
 
 $$h_t = (f_t, f_{t-1}, e_{1,t}, e_{1,t-1}, \ldots, e_{n,t}, e_{n,t-1})'$$
-
-```{r}
-### LIBRARIES
-
-library("tidyverse")
-library("readxl")
-library("tidyquant")
-
-### LOADING DATA
-
-# FRED IDs:
-ids <- c(
-  "GDPC1",     # Real GDP
-  "INDPRO",    # Industrial Production
-  "CMRMTSPL",  # Manufacturing & Trade Sales
-  "PAYEMS",    # Nonfarm Payrolls
-  "W875RX1"    # Real Personal Income less Transfers 
-)
-
-# Defining path for local data cache (for rendering)
-data_file <- "fred_macro_data.rds"
-
-# Checking if data is already downloaded
-if (file.exists(data_file)) {
-  # If yes, load it locally (bypassing FRED API)
-  raw_data <- read_rds(data_file)
-} else {
-  # If no, download from FRED and save it for future renders
-  raw_data <- tq_get(ids, get = "economic.data",
-                     from = "1969-10-01", to = "2025-01-01")
-  write_rds(raw_data, data_file)
-}
-
-# Pivoting data in wide format
-data_monthly <- raw_data %>%
-  pivot_wider(names_from = symbol, 
-              values_from = price) %>%
-  arrange(date)
-
-# Aligning the GDP measurement
-df_aligned <- data_monthly %>%
-  arrange(date) %>%
-  mutate(GDPC1 = lag(GDPC1, 2))
-
-# Applying log differences to obtain the final dataset
-df_clean <- df_aligned %>%
-  arrange(date) %>%
-  mutate(
-    # Log-difference for the 4 monthly variables (lag = 1)
-    across(c(INDPRO, CMRMTSPL, PAYEMS, W875RX1), 
-           ~ (log(.x) - log(lag(.x, 1))) * 100),
-    
-    # Log-difference for the quarterly GDP (lag = 3)
-    GDPC1 = (log(GDPC1) - log(lag(GDPC1, 3))) * 100
-  ) %>%
-  # Dropping the very first row since month-over-month lag creates an NA
-  drop_na(PAYEMS)
-
-### DEFINING THE DATA ###
-
-# gdp data
-gdp <- df_clean %>%
-  select(GDPC1) %>%
-  drop_na(GDPC1) %>%
-  as.matrix()
-
-# Matrix of indicators
-y_raw <- df_clean %>%
-  select(- date, - GDPC1) %>%
-  as.matrix()
-
-### NORMALIZING DATA ###
-
-# demeaning the y time series and standardizing it
-y <- scale(y_raw)
-
-
-
-# normalizing the variance of w to 1
-varQ <- 1
-```
-
 ```{r kalman-system}
 ### SETUP ###
 
-r     <- 1                 # Number of factors (set manually)
-TT    <- nrow(y)           # Number of observations
-n     <- ncol(y)           # Number of indicators
-h_dim <- 2*r + 2*n         # State vector dimensions
-n_lam <- r*n - r*(r - 1)/2 # Number of loadings
-
 ### MATRIX FUNCTION ###
 
-matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
+matrices <- function(th, n, r, n_lam, h_dim, varQ) {
 
   # H MATRIX #
   
@@ -237,9 +149,9 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
   list(Hmat = Hmat, Fmat = Fmat, Rmat = Rmat, Qmat = Qmat)
 }
 
-### KALMAN LOOP ###
+### KALMAN FILTER FUNCTION ###
 
-kalman <- function(th, y, n, r, TT, n_lam, h_dim, varQ = 1) {
+kalman <- function(th, y, n, r, TT, n_lam, h_dim, varQ) {
   
   # Pulling the matrices
   mats <- matrices(th, n, r, n_lam, h_dim, varQ)
@@ -288,7 +200,7 @@ kalman <- function(th, y, n, r, TT, n_lam, h_dim, varQ = 1) {
        Hmat = Hmat, Fmat = Fmat)
 }
 
-### LIKELIHOOD MAXIMIZATION ###
+### STARTING VALUES FUNCTION ###
 
 # Setting starting values (0.5 for lambdas, 0.3 for AR(2) coefficients)
 make_startval <- function(y, n, r, n_lam) {
@@ -298,45 +210,67 @@ make_startval <- function(y, n, r, n_lam) {
   sd_init     <- apply(y, 2, sd) # standard deviations
   c(lambda_init, ar_f_init, ar_e_init, sd_init)
 }
-# Pulling starting values
-th0 <- make_startval(y, n, r, n_lam)
 
-# Function that maximizes the likelihood
-opt <- optim(
-  par    = th0,
-  fn     = function(th) kalman(th, y, n, r, TT, n_lam, h_dim, varQ = 1)$neg_loglik,
-  method = "BFGS",
-  control = list(maxit = 2000)
-)
-th_hat <- opt$par
+### ESTIMATION FUNCTION ###
 
-### OBTAINING ESTIMATES ###
+# y is the dataset, r is the number of factors, maxit is the number of
+# iterations of the likelihood process
+dfm <- function(data, r = 1, maxit = 2000) {
+  
+  # Standardizing the data
+  y <- scale(data)
+  
+  # Dimensions of the dataset
+  TT <- nrow(y)
+  n  <- ncol(y)
+  # Dimensions of the state vector and the number of parameters
+  h_dim <- 2*r + 2*n
+  n_lam <- r*n - r*(r - 1)/2
+  # Variance normalization
+  varQ <- 1
+  
+  # Starting values for the parameters
+  th0 <- make_startval(y, n, r, n_lam)
 
-# Hessian estimate
-H <- optimHess(
-  par = th_hat,
-  fn  = function(th) kalman(th, y, n, r, TT, n_lam, h_dim)$neg_loglik
-)
-# standard error estimates
-se_hat <- sqrt(diag(solve(H)))
+  # Likelihood maxmization
+  opt <- optim(
+    par    = th0,
+    fn     = function(th) kalman(th, y, n, r, TT, n_lam, 
+                                 h_dim, varQ)$neg_loglik,
+    method = "BFGS",
+    hessian = TRUE,
+    control = list(maxit = maxit, reltol = 1e-8)
+  )
+  th_hat <- opt$par
+  
+  # Standard errors estimates
+  H      <- opt$hessian
+  se_hat <- sqrt(diag(solve(H)))
 
-# Auxiliary indexes
-idx_lam <- 1:n_lam
-idx_phi <- (n_lam + 1):(n_lam + 2*r)
-idx_psi <- (n_lam + 2*r + 1):(n_lam + 2*r + 2*n)
-idx_sig <- (n_lam + 2*r + 2*n + 1):(n_lam + 2*r + 2*n + n)
-
-# Parameter estimates and SEs
-lambda_hat <- th_hat[idx_lam]; lambda_se <- se_hat[idx_lam]
-phi_hat    <- th_hat[idx_phi]; phi_se    <- se_hat[idx_phi]
-psi_hat    <- th_hat[idx_psi]; psi_se    <- se_hat[idx_psi]
-sigma_hat  <- th_hat[idx_sig]; sigma_se  <- se_hat[idx_sig]
-
-# Rerunning Kalman filter with optimal parameters to extract the factors
-kf_hat     <- kalman(th_hat, y, n, r, TT, n_lam, h_dim)
-factor_hat <- kf_hat$filter_mat[, 2*(1:r) - 1, drop = FALSE]
+  # Rerunning Kalman filter with optimal parameters to extract the factors
+  kf_hat     <- kalman(th_hat, y, n, r, TT, n_lam, h_dim, varQ)
+  factor_hat <- kf_hat$filter_mat[, 2*(1:r) - 1, drop = FALSE]
+  
+  # Auxiliary indexes
+  idx_lam <- 1:n_lam
+  idx_phi <- (n_lam + 1):(n_lam + 2*r)
+  idx_psi <- (n_lam + 2*r + 1):(n_lam + 2*r + 2*n)
+  idx_sig <- (n_lam + 2*r + 2*n + 1):(n_lam + 2*r + 2*n + n)
+  
+  # Returning everything as a named list
+  list(
+    convergence = opt$convergence,
+    loglik      = -opt$value,
+    factor      = factor_hat,
+    lambda      = list(est = th_hat[idx_lam], se = se_hat[idx_lam]),
+    phi         = list(est = th_hat[idx_phi], se = se_hat[idx_phi]),
+    psi         = list(est = th_hat[idx_psi], se = se_hat[idx_psi]),
+    sigma       = list(est = th_hat[idx_sig], se = se_hat[idx_sig]),
+    th_hat      = th_hat,
+    se_hat      = se_hat
+  )
+}
 ```
-
 
 ## 1.1. Latent factor estimation
 
@@ -355,6 +289,86 @@ The Kalman filter, however, requires the errors of the measurement equation $e_t
 ## 1.2. Mapping the latent factor to GDP growth
 
 After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
+
+```{r}
+### LIBRARIES
+
+library("tidyverse")
+library("readxl")
+library("tidyquant")
+
+### LOADING DATA
+
+# FRED IDs:
+ids <- c(
+  "GDPC1",     # Real GDP
+  "INDPRO",    # Industrial Production
+  "CMRMTSPL",  # Manufacturing & Trade Sales
+  "PAYEMS",    # Nonfarm Payrolls
+  "W875RX1"    # Real Personal Income less Transfers 
+)
+
+# Defining path for local data cache (for rendering)
+data_file <- "fred_macro_data.rds"
+
+# Checking if data is already downloaded
+if (file.exists(data_file)) {
+  # If yes, load it locally (bypassing FRED API)
+  raw_data <- read_rds(data_file)
+} else {
+  # If no, download from FRED and save it for future renders
+  raw_data <- tq_get(ids, get = "economic.data",
+                     from = "1969-10-01", to = "2025-01-01")
+  write_rds(raw_data, data_file)
+}
+
+# Pivoting data in wide format
+data_monthly <- raw_data %>%
+  pivot_wider(names_from = symbol, 
+              values_from = price) %>%
+  arrange(date)
+
+# Aligning the GDP measurement
+df_aligned <- data_monthly %>%
+  arrange(date) %>%
+  mutate(GDPC1 = lag(GDPC1, 2))
+
+# Applying log differences to obtain the final dataset
+df_clean <- df_aligned %>%
+  arrange(date) %>%
+  mutate(
+    # Log-difference for the 4 monthly variables (lag = 1)
+    across(c(INDPRO, CMRMTSPL, PAYEMS, W875RX1), 
+           ~ (log(.x) - log(lag(.x, 1))) * 100),
+    
+    # Log-difference for the quarterly GDP (lag = 3)
+    GDPC1 = (log(GDPC1) - log(lag(GDPC1, 3))) * 100
+  ) %>%
+  # Dropping the very first row since month-over-month lag creates an NA
+  drop_na(PAYEMS)
+
+### DEFINING THE DATA ###
+
+# gdp data
+gdp <- df_clean %>%
+  select(GDPC1) %>%
+  drop_na(GDPC1) %>%
+  as.matrix()
+
+# Matrix of indicators
+y_raw <- df_clean %>%
+  select(- date, - GDPC1) %>%
+  as.matrix()
+```
+
+```{r}
+fit1 <- dfm(data = y_raw, r = 1, maxit = 2000)
+```
+
+```{r}
+fit1$lambda$est
+```
+
 
 ```{r}
 ### CONVERTING FACTOR TO QUARTERLY GROWTH RATE ###
@@ -1169,38 +1183,27 @@ inflation <- df_clean %>%
 y_raw <- df_clean %>%
   select(- date, - GDPC1) %>%
   as.matrix()
-
-### NORMALIZING DATA ###
-
-# demeaning the y time series and standardizing it
-y <- scale(y_raw)
-
-TT <- nrow(y) # number of observations
-n <- ncol(y) # number of indicators
-
-# normalizing the variance of w to 1
-varQ <- 1
 ```
 
 ```{r}
-K <- 1
+fit2 <- dfm(data = y_raw, r = 1, maxit = 2000)
+```
 
-opt_res <- optim(par     = make_startval(y, n, K),
-                 fn      = ofn,
-                 y = y, n = n, K = K, TT = TT, varQ = varQ,
-                 method  = "BFGS",
-                 hessian = TRUE,
-                 control = list(maxit = 2000))
+```{r}
+fit2$convergence
+```
 
-cramerrao <- solve(opt_res$hessian)
-std_err   <- sqrt(diag(cramerrao))
+```{r}
+TT <- nrow(y_raw)
+```
 
-final_kf   <- kalman(opt_res$par, y, n, K, TT, varQ)
-filter_mat <- final_kf$filter_mat
-factor     <- extract_factors(filter_mat, K)[, 1]
-Fmat       <- final_kf$Fmat
+```{r}
+fit2$lambda$est
+```
 
-### CONVERTING FACTOR TO QUARTERLY GROWTH RATE ###
+
+```{r}
+factor <- fit2$factor[, 1]
 
 factorQ <- (1/3) * factor[5:length(factor)] +
   (2/3) * factor[4:(length(factor) - 1)] +
@@ -1531,41 +1534,13 @@ inflation <- df_clean %>% select(PCEPI) %>% drop_na(PCEPI) %>% as.matrix()
 # All 8 indicators enter the Kalman filter together (PCEPI included)
 # Ordering: INDPRO, CMRMTSPL, PAYEMS, W875RX1, CPIAUCSL, CPILFESL, PCEPI, PPIACO
 y_raw <- df_clean %>% select(-date, -GDPC1) %>% as.matrix()
-y     <- scale(y_raw)
-n     <- ncol(y)   # n = 8
-TT    <- nrow(y)
-varQ  <- 1
 
+fit3 <- dfm(data = y_raw, r = 2)
 
-K <- 2
+factor_real  <- fit3$factor[, 1]
+factor_price <- fit3$factor[, 2]
 
-# For K=2 informed starting loadings are important for convergence:
-# factor 1 loads heavily on real indicators (1-4), factor 2 on price (5-8)
-lambda1_init <- c(0.9, 0.8, 0.7, 0.6, 0.1, 0.1, 0.1, 0.1)  # rows 1..n for factor 1
-lambda2_init <- c(0.1, 0.1, 0.1, 0.6, 0.7, 0.8, 0.9)         # rows 2..n for factor 2
-
-startval <- c(lambda1_init, lambda2_init,
-              rep(0.3, 2 * K),   # factor AR(2) coefficients
-              rep(0.3, 2 * n),   # idiosyncratic AR(2) coefficients
-              apply(y, 2, sd))   # idiosyncratic SDs
-
-opt_res <- optim(par     = startval,
-                 fn      = ofn,
-                 y = y, n = n, K = K, TT = TT, varQ = varQ,
-                 method  = "BFGS",
-                 hessian = TRUE,
-                 control = list(maxit = 2000))
-
-cramerrao <- solve(opt_res$hessian)
-std_err   <- sqrt(diag(cramerrao))
-
-final_kf     <- kalman(opt_res$par, y, n, K, TT, varQ)
-filter_mat   <- final_kf$filter_mat
-Fmat         <- final_kf$Fmat
-
-factors      <- extract_factors(filter_mat, K)
-factor_real  <- factors[, 1]
-factor_price <- factors[, 2]
+TT <- nrow(y_raw)
 
 ### CONVERTING REAL FACTOR TO QUARTERLY GROWTH RATE ###
 
@@ -1696,6 +1671,11 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
 ```
 
 Looking at the loading estimates reported in Table X, *factor 1* indeed loads heavily on real-activity indicators (between $0.532$ and $0.899$), while assigning loadings close to zero to all four price indicators (between $0.044$ and $0.119$). On the other hand, *factor 2* does exactly the opposite, loading strongly on price indicators (between $0.218$ and $0.703$) while assigning near-zero loadings to the real-activity ones (between $-0.101$ and $0.066$).
+
+```{r}
+fit3$lambda$est
+```
+
 
 ```{r}
 ### EXTRACTING FACTOR LOADINGS ###
