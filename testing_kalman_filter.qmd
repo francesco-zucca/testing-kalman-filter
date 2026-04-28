@@ -152,13 +152,11 @@ varQ <- 1
 ```{r kalman-system}
 ### SETUP ###
 
-TT <- nrow(y)                # Number of observations
-n <- ncol(y)                 # Number of indicators
-r <- 1                       # Number of factors (set manually)
-h_dim   <- (2 * r) + (2 * n) # State vector dimensions
-n_lam <- function(r, K) {    # Number of loadings
-  K * n - K * (K - 1) / 2
-}
+r     <- 1                 # Number of factors (set manually)
+TT    <- nrow(y)           # Number of observations
+n     <- ncol(y)           # Number of indicators
+h_dim <- 2*r + 2*n         # State vector dimensions
+n_lam <- r*n - r*(r - 1)/2 # Number of loadings
 
 ### MATRIX FUNCTION ###
 
@@ -168,7 +166,7 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
   
   # Factor loading block (leftside block)
   # Starting the block
-  lambda <- matrix(0, n, 2 * r)
+  lambda <- matrix(0, n, 2*r)
   # Index for theta
   idx <- 1
   # Building the block
@@ -176,7 +174,7 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
     # Number of free loadings
     nf <- n - j + 1
     # Filling odd columns with loadings
-    Lambda[j:n, (2 * j - 1)] <- th[idx:(idx + nf - 1)]
+    lambda[j:n, (2*j - 1)] <- th[idx:(idx + nf - 1)]
     idx <- idx + nf
   }
   
@@ -190,7 +188,7 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
   
   # Calculating offset of parameters in the theta vector
   off_phi <- n_lam
-  off_psi <- n_lam + (2 * r) 
+  off_psi <- n_lam + (2*r) 
   
   # Starting the matrix
   Fmat <- matrix(0, h_dim, h_dim)
@@ -198,21 +196,21 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
   # Factor rows (2 rows per factor, filling rows one by one)
   for (j in 1:r) {
     # Phi_1 entry (odd row, odd column)
-    Fmat[(2 * j - 1), (2 * j - 1)] <- th[off_phi + 2 * (j - 1) + 1]
+    Fmat[(2*j - 1), (2*j - 1)] <- th[off_phi + 2*(j - 1) + 1]
     # Phi_2 entry (odd row, even column)
-    Fmat[(2 * j - 1), (2 * j)] <- th[off_phi + 2 * (j - 1) + 2]
+    Fmat[(2*j - 1), (2*j)] <- th[off_phi + 2*(j - 1) + 2]
     # 1 entry (even row, odd column)
-    Fmat[(2 * j), (2 * j - 1)] <- 1 
+    Fmat[(2*j), (2*j - 1)] <- 1 
   }
 
   # Idiosyncratic rows (2 rows per series)
   for (i in seq_len(n)) {
     # Psi_1 entry (odd row, odd column)
-    Fmat[(2 * i - 1), (2 * i - 1)]  <- th[off_psi + 2 * (i - 1) + 1]
+    Fmat[(2*r + 2*i - 1), (2*r + 2*i - 1)]  <- th[off_psi + 2*(i - 1) + 1]
     # Psi_2 entry (odd row, even column)
-    Fmat[(2 * i - 1), (2 * i)] <- th[off_psi + 2 * (i - 1) + 2]
+    Fmat[(2*r + 2*i - 1), (2*r + 2*i)] <- th[off_psi + 2*(i - 1) + 2]
     # 1 entry (even row, odd column)
-    Fmat[(2 * i), (2 * i - 1)] <- 1
+    Fmat[(2*r + 2*i), (2*r + 2*i - 1)] <- 1
   }
 
   # R MATRIX #
@@ -223,7 +221,7 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
   # Q MATRIX #
   
   # Calculating offset of parameters in the theta vector
-  off_sig <- n_lam + (2 * r) + (2 * n) 
+  off_sig <- n_lam + (2*r) + (2*n) 
   
   # Auxiliary vector of (VarQ 0) for each factor
   varQ_auxvec <- c(rep(c(varQ, 0), r))
@@ -241,64 +239,104 @@ matrices <- function(th, n, r, n_lam, h_dim, varQ = 1) {
 
 ### KALMAN LOOP ###
 
-kalman <- function(th, y, n, r, TT, varQ = 1) {
-  mats  <- matrices(th, n, K, varQ)
-  Hmat  <- mats$Hmat;  Fmat <- mats$Fmat
-  Rmat  <- mats$Rmat;  Qmat <- mats$Qmat
-  s_dim <- mats$s_dim
-
-  h00        <- matrix(0, s_dim, 1)
-  Pmat00     <- diag(s_dim)
+kalman <- function(th, y, n, r, TT, n_lam, h_dim, varQ = 1) {
+  
+  # Pulling the matrices
+  mats <- matrices(th, n, r, n_lam, h_dim, varQ)
+  Hmat <- mats$Hmat  
+  Fmat <- mats$Fmat
+  Rmat <- mats$Rmat
+  Qmat <- mats$Qmat
+  
+  # Initializing the vectors to store the likelihood and the factor estimate
   like       <- numeric(TT)
-  filter_mat <- matrix(0, TT, s_dim)
-
+  filter_mat <- matrix(0, TT, h_dim)
+  
+  # Initial state vector (h_{0|0} = 0) and variance (P_{0|0} = I)
+  h00        <- matrix(0, h_dim, 1)
+  Pmat00     <- diag(h_dim)
+  
+  # Kalman filter loop
   for (it in seq_len(TT)) {
+    # Step 1: prediction of ht given info at t-1
     h10      <- Fmat %*% h00
+    # Step 2: prediction of Pt given info at t-1
     Pmat10   <- Fmat %*% Pmat00 %*% t(Fmat) + Qmat
+    # Step 3: prediction of yt given info at t-1
     y10      <- Hmat %*% h10
+    # Step 4: estimation of the forecast error
     e10      <- matrix(y[it, ], ncol = 1) - y10
-    S10      <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat
-    like[it] <- -0.5 * (n * log(2 * pi) + log(det(S10)) +
-                          drop(t(e10) %*% solve(S10) %*% e10))
-    Kmat     <- Pmat10 %*% t(Hmat) %*% solve(S10)
-    h00      <- h10 + Kmat %*% e10
-    Pmat00   <- Pmat10 - Kmat %*% Hmat %*% Pmat10
-    filter_mat[it, ] <- t(h00)
+    # Step 5: estimation of the variance of the forecast error
+    Fmat10   <- Hmat %*% Pmat10 %*% t(Hmat) + Rmat
+    # Log-Likelihood Calculation
+    like[it] <- -0.5 * (n * log(2 * pi) + log(det(Fmat10)) +
+                          drop(t(e10) %*% solve(Fmat10) %*% e10))
+    # Step 6: Kalman gain
+    Kmat     <- Pmat10 %*% t(Hmat) %*% solve(Fmat10)
+    # Step 7: updating of filter and variance
+    h11      <- h10 + Kmat %*% e10
+    Pmat11   <- Pmat10 - Kmat %*% Hmat %*% Pmat10
+    
+    # Iterating
+    filter_mat[it, ] <- t(h11)
+    h00 <- h11
+    Pmat00 <- Pmat11
   }
-
-  list(neg_loglik = -sum(like), filter_mat = filter_mat, Hmat = Hmat, Fmat = Fmat)
+  
+  # Returning loglikelihood and the extracted matrices
+  list(neg_loglik = -sum(like), filter_mat = filter_mat, 
+       Hmat = Hmat, Fmat = Fmat)
 }
 
-ofn <- function(th, y, n, K, TT, varQ = 1) kalman(th, y, n, K, TT, varQ)$neg_loglik
+### LIKELIHOOD MAXIMIZATION ###
 
-# Default starting values: loadings decrease with each factor, AR = 0.3, SDs from data
-make_startval <- function(y, n, K) {
-  lambda_init <- unlist(lapply(seq_len(K), function(k)
-    seq(0.9 - 0.1 * (k - 1), 0.5, length.out = n - k + 1L)
-  ))
-  c(lambda_init, rep(0.3, 2L * K), rep(0.3, 2L * n), apply(y, 2, sd))
+# Setting starting values (0.5 for lambdas, 0.3 for AR(2) coefficients)
+make_startval <- function(y, n, r, n_lam) {
+  lambda_init <- rep(0.5, n_lam) # lambdas
+  ar_f_init   <- rep(0.3, 2*r) # factor AR(2)
+  ar_e_init   <- rep(0.3, 2*n) # errors AR(2)
+  sd_init     <- apply(y, 2, sd) # standard deviations
+  c(lambda_init, ar_f_init, ar_e_init, sd_init)
 }
+# Pulling starting values
+th0 <- make_startval(y, n, r, n_lam)
 
-# Extract factor columns from filter output (returns TT x K matrix)
-extract_factors  <- function(filter_mat, K) filter_mat[, 2L * seq_len(K) - 1L, drop = FALSE]
+# Function that maximizes the likelihood
+opt <- optim(
+  par    = th0,
+  fn     = function(th) kalman(th, y, n, r, TT, n_lam, h_dim, varQ = 1)$neg_loglik,
+  method = "BFGS",
+  control = list(maxit = 2000)
+)
+th_hat <- opt$par
 
-# Extract parameter sub-vectors from estimated theta
-extract_loadings <- function(th, n, K) {
-  Lambda <- matrix(0, n, K); idx <- 1L
-  for (k in seq_len(K)) {
-    nf <- n - k + 1L; Lambda[k:n, k] <- th[idx:(idx + nf - 1L)]; idx <- idx + nf
-  }
-  Lambda
-}
-extract_psi   <- function(th, n, K) {
-  off <- n_lam(n, K) + 2L * K
-  matrix(th[(off + 1L):(off + 2L * n)], nrow = n, byrow = TRUE)
-}
-extract_sigma <- function(th, n, K) {
-  off <- n_lam(n, K) + 2L * K + 2L * n
-  th[(off + 1L):(off + n)]
-}
+### OBTAINING ESTIMATES ###
+
+# Hessian estimate
+H <- optimHess(
+  par = th_hat,
+  fn  = function(th) kalman(th, y, n, r, TT, n_lam, h_dim)$neg_loglik
+)
+# standard error estimates
+se_hat <- sqrt(diag(solve(H)))
+
+# Auxiliary indexes
+idx_lam <- 1:n_lam
+idx_phi <- (n_lam + 1):(n_lam + 2*r)
+idx_psi <- (n_lam + 2*r + 1):(n_lam + 2*r + 2*n)
+idx_sig <- (n_lam + 2*r + 2*n + 1):(n_lam + 2*r + 2*n + n)
+
+# Parameter estimates and SEs
+lambda_hat <- th_hat[idx_lam]; lambda_se <- se_hat[idx_lam]
+phi_hat    <- th_hat[idx_phi]; phi_se    <- se_hat[idx_phi]
+psi_hat    <- th_hat[idx_psi]; psi_se    <- se_hat[idx_psi]
+sigma_hat  <- th_hat[idx_sig]; sigma_se  <- se_hat[idx_sig]
+
+# Rerunning Kalman filter with optimal parameters to extract the factors
+kf_hat     <- kalman(th_hat, y, n, r, TT, n_lam, h_dim)
+factor_hat <- kf_hat$filter_mat[, 2*(1:r) - 1, drop = FALSE]
 ```
+
 
 ## 1.1. Latent factor estimation
 
@@ -319,30 +357,15 @@ The Kalman filter, however, requires the errors of the measurement equation $e_t
 After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
 ```{r}
-K <- 1
-
-opt_res <- optim(par     = make_startval(y, n, K),
-                 fn      = ofn,
-                 y = y, n = n, K = K, TT = TT, varQ = varQ,
-                 method  = "BFGS",
-                 hessian = TRUE,
-                 control = list(maxit = 2000))
-
-cramerrao <- solve(opt_res$hessian)
-std_err   <- sqrt(diag(cramerrao))
-
-final_kf   <- kalman(opt_res$par, y, n, K, TT, varQ)
-filter_mat <- final_kf$filter_mat
-factor     <- extract_factors(filter_mat, K)[, 1]
-Fmat       <- final_kf$Fmat
-
 ### CONVERTING FACTOR TO QUARTERLY GROWTH RATE ###
 
-factorQ <- (1/3) * factor[5:length(factor)] +
-  (2/3) * factor[4:(length(factor) - 1)] +
-  factor[3:(length(factor) - 2)] +
-  (2/3) * factor[2:(length(factor) - 3)] +
-  (1/3) * factor[1:(length(factor) - 4)]
+factor <- factor_hat[, 1]
+
+factorQ <- (1/3) * factor[5:TT] +
+  (2/3) * factor[4:(TT - 1)] +
+  factor[3:(TT - 2)] +
+  (2/3) * factor[2:(TT - 3)] +
+  (1/3) * factor[1:(TT - 4)]
 
 i <- 1
 factgdp <- c()
