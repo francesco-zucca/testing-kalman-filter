@@ -35,6 +35,8 @@ library("readxl")
 library("tidyquant")
 library("psych")
 library("ggcorrplot")
+library("knitr")
+library("kableExtra")
 ```
 
 # Abstract
@@ -51,12 +53,12 @@ Finally, we expand the number of indicators, including price-side variables and 
 
 We first replicate model proposed by Stock and Watson. Their model assumes that the comovements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. The included indicators are:
 
--   INDPRO (Industrial Production Index).
+-   IPMAN (Industrial Production: Manufacturing).
 -   CMRMTSPL (Real Manufacturing and Trade Industries Sales).
 -   PAYEMS (Total Nonfarm Payrolls).
 -   W875RX1 (Real Personal Income Excluding Current Transfer Receipts).
 
-These series are modern FRED equivalents of the original Stock and Watson indicators, following the implementation of Fulton (2015) as part of the *statsmodels* library [@seabold2010]. Each substitute captures the same underlying dimension of real economic activity: industrial output (`INDPRO`), goods and services demand (`CMRMTSPL`), labour market conditions (`PAYEMS`), and household earned income (`W875RX1`). Therefore, results should be interpreted as a conceptual replication rather than a numerical one, and differences in estimated loadings mostly attributable to the series substitutions.
+These series are FRED equivalents of the original Stock and Watson indicators, following the implementation of Fulton (2015) as part of the *statsmodels* library [@seabold2010]. Indeed, each series captures the same underlying dimension of real economic activity as the original indicators included in the Stock and Watson paper: industrial output (`INDPRO`), goods and services demand (`CMRMTSPL`), labour market conditions (`PAYEMS`), and household earned income (`W875RX1`). Therefore, results should be interpreted as a conceptual replication rather than a numerical one, and differences in estimated loadings mostly attributable to the series substitutions.
 
 Formally, the model is represented by the following structural equations:
 
@@ -71,7 +73,7 @@ Where:
 -   $f_t$ is the $(1 \times 1)$ factor scalar at time $t$
 -   $e_t$ is the $(4 \times 1)$ vector of errors at time $t$
 
-Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the graphical model represented in Figure 1.
+Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the graphical model represented in @fig-S&W.
 
 ```{r}
 #| label: fig-S&W
@@ -312,9 +314,11 @@ The Kalman filter, however, requires the errors of the measurement equation $e_t
 -   The measurement equation: $y_t = H h_{t}$
 -   The factor transition equation: $h_{t} = Fh_{t-1} + v_{t}, \quad v_{t} \sim i.i.d. N(0,\sigma)$
 
+Optimal parameters are estimated via Gaussian Maximum Likelihood.
+
 ## 1.2. Mapping the latent factor to GDP growth
 
-After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
+After estimating the latent factor using the Kalman filter, we rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
 ```{r}
 ### LOADING DATA
@@ -388,6 +392,8 @@ y_raw <- df_clean %>%
 fit1 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
+As shown in @fig-fit1, empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of $0.276$, translating to a Root Mean Squared Error (RMSE) of roughly $0.526$ percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
+
 ```{r}
 ### MAPPING FACTOR TO GDP ###
 
@@ -437,6 +443,9 @@ r_squared <- 1 - (ss_res / ss_tot)
 
 ### PLOTTING ###
 
+#| label: fig-fit1
+#| fig-cap: "Mapped Factor vs Actual GDP Quarterly Growth, Original Stock and Watson Model"
+
 # Combining the data into a tibble
 plot_data <- tibble(
   Index = 1:length(y_gdp),
@@ -471,7 +480,53 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   )
 ```
 
-The empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of 0.276, translating to a Root Mean Squared Error (RMSE) of roughly 0.526 percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
+As reported in @tbl-fit1-estimates, all four indicators load positively on the estimated factor, in decreasing order of magnitude: *IPMAN* ($\hat{\lambda} = 0.926$), *PAYEMS* ($\hat{\lambda} = 0.782$), *CMRMTSPL* ($\hat{\lambda} = 0.711$), and *W875RX1* ($\hat{\lambda} = 0.525$). The results are consistent with the original S&W estimates, where all indicators also had positive loading and industrial production also carried the largest loading ($0.717$) [@S&W1988].
+
+```{r}
+#| label: tbl-fit1-estimates
+#| tbl-cap: "Maximum Likelihood Estimates of the Stock and Watson Model"
+
+# Building the table
+psi <- fit1$psi$est
+psi_se <- fit1$psi$se
+sd_vals <- fit1$sd$est^2
+sd_se <- 2 * fit1$sd$est * fit1$sd$se  # delta method
+
+fmt <- function(x, s) paste0(sprintf("%.3f", x), " (", sprintf("%.3f", s), ")")
+
+sw_table <- data.frame(
+  Parameter   = c("$\\lambda_i$", "$\\psi_{1i}$", "$\\psi_{2i}$", "$\\sigma_i^2$"),
+  INDPRO      = c(fmt(fit1$lambda$est[1], fit1$lambda$se[1]),
+                  fmt(psi[1], psi_se[1]),
+                  fmt(psi[2], psi_se[2]),
+                  fmt(sd_vals[1], sd_se[1])),
+  CMRMTSPL    = c(fmt(fit1$lambda$est[2], fit1$lambda$se[2]),
+                  fmt(psi[3], psi_se[3]),
+                  fmt(psi[4], psi_se[4]),
+                  fmt(sd_vals[2], sd_se[2])),
+  PAYEMS      = c(fmt(fit1$lambda$est[3], fit1$lambda$se[3]),
+                  fmt(psi[5], psi_se[5]),
+                  fmt(psi[6], psi_se[6]),
+                  fmt(sd_vals[3], sd_se[3])),
+  W875RX1     = c(fmt(fit1$lambda$est[4], fit1$lambda$se[4]),
+                  fmt(psi[7], psi_se[7]),
+                  fmt(psi[8], psi_se[8]),
+                  fmt(sd_vals[4], sd_se[4]))
+)
+
+knitr::kable(sw_table, 
+             col.names = c("Parameter", "IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1"),
+             align     = c("l", "c", "c", "c", "c"),
+             escape    = FALSE) %>%
+  kableExtra::kable_styling(full_width = FALSE, 
+                            bootstrap_options = c("striped", "hover")) %>%
+  kableExtra::add_header_above(c("Coincident Indicator" = 5)) %>%
+  kableExtra::footnote(
+  general       = "Standard errors in parentheses.",
+  general_title = "",
+  footnote_as_chunk = TRUE
+)
+```
 
 ## 1.3. The normality assumption
 
@@ -1109,7 +1164,7 @@ gdp_id <- "GDPC1"
 
 # Real economy
 real_ids <- c(
-  "INDPRO",   # Industrial Production
+  "IPMAN",    # Industrial Production
   "CMRMTSPL", # Manufacturing & Trade Sales
   "PAYEMS",   # Nonfarm Payrolls
   "W875RX1"   # Real Personal Income less Transfers 
@@ -1136,7 +1191,7 @@ if (file.exists(data_file)) {
 } else {
   # If no, download from FRED and save it for future renders
   raw_data <- tq_get(ids, get = "economic.data",
-                     from = "1969-10-01", to = "2025-01-01")
+                     from = "1972-04-01", to = "2025-01-01")
   write_rds(raw_data, data_file)
 }
 
@@ -1638,7 +1693,7 @@ lambda1 <- Lambda[, 1]
 lambda2 <- Lambda[, 2]
 
 # Setting indicator names
-indicator_names <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1",
+indicator_names <- c("IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1",
                      "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
 
 # Returning the loadings
