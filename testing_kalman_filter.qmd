@@ -37,7 +37,6 @@ library("psych")
 library("ggcorrplot")
 ```
 
-
 # Abstract
 
 In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that co-movements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic single-factor model in which the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth [@S&W1988].
@@ -50,7 +49,16 @@ Finally, we expand the number of indicators, including price-side variables and 
 
 # 1. The Stock & Watson model
 
-We first replicate model proposed by Stock and Watson. Their model assumes that the comovements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. Formally, the model is represented by the following structural equations:
+We first replicate model proposed by Stock and Watson. Their model assumes that the comovements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. The included indicators are:
+
+-   INDPRO (Industrial Production Index).
+-   CMRMTSPL (Real Manufacturing and Trade Industries Sales).
+-   PAYEMS (Total Nonfarm Payrolls).
+-   W875RX1 (Real Personal Income Excluding Current Transfer Receipts).
+
+These series are modern FRED equivalents of the original Stock and Watson indicators, following the implementation of Fulton (2015) as part of the *statsmodels* library [@seabold2010]. Each substitute captures the same underlying dimension of real economic activity: industrial output (`INDPRO`), goods and services demand (`CMRMTSPL`), labour market conditions (`PAYEMS`), and household earned income (`W875RX1`). Therefore, results should be interpreted as a conceptual replication rather than a numerical one, and differences in estimated loadings mostly attributable to the series substitutions.
+
+Formally, the model is represented by the following structural equations:
 
 -   The measurement equation: $y_t = \lambda f_{t} + e_{t}$
 -   The factor transition equation: $f_{t} = \phi_{1}f_{t-1} + \phi_{2}f_{t-2} + w_{t}, \quad w_{t} \sim i.i.d. N(0,1)$
@@ -63,9 +71,15 @@ Where:
 -   $f_t$ is the $(1 \times 1)$ factor scalar at time $t$
 -   $e_t$ is the $(4 \times 1)$ vector of errors at time $t$
 
-Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the following graphical model:
+Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the graphical model represented in Figure 1.
 
-![](images/clipboard-3627855944.jpeg)
+```{r}
+#| label: fig-S&W
+#| fig-cap: "Stock & Watson dynamic factor model [@S&W1988]"
+#| echo: false
+
+knitr::include_graphics("images/S&W_model.png")
+```
 
 Notice that this model assumes two conditional independence statements. First, the four indicators are cross-sectionally conditionally independent given the latent factor, meaning that once the common factor is known, knowing one indicator provides no additional information about the others. Formally:
 
@@ -78,6 +92,7 @@ $$Y_t \perp\!\!\!\perp \{Y_s\}_{s \neq t} \mid h_{t}$$
 Where:
 
 $$h_t = (f_t, f_{t-1}, e_{1,t}, e_{1,t-1}, \ldots, e_{n,t}, e_{n,t-1})$$
+
 ```{r kalman-system}
 ### SETUP ###
 
@@ -309,7 +324,7 @@ gdp_id <- "GDPC1"
 
 # Real economy
 real_ids <- c(
-  "INDPRO",   # Industrial Production
+  "IPMAN",   # Industrial Production
   "CMRMTSPL", # Manufacturing & Trade Sales
   "PAYEMS",   # Nonfarm Payrolls
   "W875RX1"   # Real Personal Income less Transfers 
@@ -328,7 +343,7 @@ if (file.exists(data_file)) {
 } else {
   # If no, download from FRED and save it for future renders
   raw_data <- tq_get(ids, get = "economic.data",
-                     from = "1969-10-01", to = "2025-01-01")
+                     from = "1972-04-01", to = "2025-01-01")
   write_rds(raw_data, data_file)
 }
 
@@ -456,7 +471,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   )
 ```
 
-The empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.7595$ ). Moreover, the model yields an in-sample MSE of 0.277, translating to a Root Mean Squared Error (RMSE) of roughly 0.526 percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
+The empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of 0.276, translating to a Root Mean Squared Error (RMSE) of roughly 0.526 percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
 
 ## 1.3. The normality assumption
 
@@ -1174,8 +1189,7 @@ y_raw <- df_clean %>%
 fit2 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
-
-The results of parallel analysis on the expanded dataset are reported in Figure X. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.1$ (versus a benchmark of $1.2$), and the second is around $2.6$ (against $1.1$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators. 
+The results of parallel analysis on the expanded dataset are reported in Figure X. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.1$ (versus a benchmark of $1.2$), and the second is around $2.6$ (against $1.1$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators.
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1423,7 +1437,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   )
 ```
 
-The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ and $0.90$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely. 
+The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ and $0.90$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely.
 
 ```{r}
 # Extracting factor loadings
@@ -1597,7 +1611,6 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
     plot.subtitle = element_text(color = "darkgrey", size = 11)
   )
 ```
-
 
 Looking at the loading estimates reported in Table X, *factor 1* indeed loads heavily on real-activity indicators (between $0.532$ and $0.899$), while assigning loadings close to zero to all four price indicators (between $0.044$ and $0.119$). On the other hand, *factor 2* does exactly the opposite, loading strongly on price indicators (between $0.218$ and $0.703$) while assigning near-zero loadings to the real-activity ones (between $-0.101$ and $0.066$).
 
