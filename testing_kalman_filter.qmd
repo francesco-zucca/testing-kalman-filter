@@ -37,6 +37,7 @@ library("psych")
 library("ggcorrplot")
 library("knitr")
 library("kableExtra")
+library("patchwork")
 ```
 
 # Abstract
@@ -58,7 +59,7 @@ We first replicate model proposed by Stock and Watson. Their model assumes that 
 -   PAYEMS (Total Nonfarm Payrolls).
 -   W875RX1 (Real Personal Income Excluding Current Transfer Receipts).
 
-These series are FRED equivalents of the original Stock and Watson indicators, following the implementation of Fulton (2015) as part of the *statsmodels* library [@seabold2010]. Indeed, each series captures the same underlying dimension of real economic activity as the original indicators included in the Stock and Watson paper: industrial output (`INDPRO`), goods and services demand (`CMRMTSPL`), labour market conditions (`PAYEMS`), and household earned income (`W875RX1`). Therefore, results should be interpreted as a conceptual replication rather than a numerical one, and differences in estimated loadings mostly attributable to the series substitutions.
+These series are FRED equivalents of the original Stock and Watson indicators, following the implementation of Fulton (2015) as part of the *statsmodels* library [@seabold2010]. Indeed, each series captures the same underlying dimension of real economic activity as the original indicators included in the Stock and Watson paper: industrial output (*INDPRO*), goods and services demand (*CMRMTSPL*), labor market conditions (*PAYEMS*), and household earned income (*W875RX1*). Therefore, results should be interpreted as a conceptual replication rather than a numerical one, and differences in estimated loadings mostly attributable to the series substitutions.
 
 Formally, the model is represented by the following structural equations:
 
@@ -475,8 +476,8 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   theme_minimal() +
   theme(
     legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "darkgrey", size = 11)
+    plot.title = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(color = "darkgrey", size = 10)
   )
 ```
 
@@ -1027,11 +1028,11 @@ In this chapter we empirically examine how the Kalman filter behaves when the nu
 
 Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
 
-In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng [@BaiNg2002], which minimize unexplained variance while applying a penalty for each additional factor. However, this criteria is derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors.
+In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng [@BaiNg2002], which minimize unexplained variance while applying a penalty for each additional factor. However, this criteria is derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Indeed, as Bai and Ng note, *"When* $min\{N, T\}$ is 40 or larger, the proposed tests give precise estimates of the number of factors. Since our theory is based on large $N$ and large $T$, it is not surprising that for very small $N$ or $T$, the proposed criteria are inadequate.". Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors.
 
 We therefore use parallel analysis, originally proposed by Horn [@Horn1965] to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
 
-In the standard static application, the idiosyncratic component is simulated as white noise. To better translate this to our dynamic application, we simulate noise data that follows an AR(2) process, with coefficients and variances taken from the Kalman filter estimate obtained in *Chapter 1*. This ensures that the noise benchmark takes into account the time-dependence structure of our data.
+In the standard static application, the idiosyncratic component is simulated as white noise. To better adapt this to our dynamic application, we generate noise data from an AR(2) process using a Monte Carlo approach with 500 simulations. For each iteration, we use the same number of observations as our sample ($633$), applying the coefficients and variances derive from the Kalman filter estimates in *Chapter 1*. Finally, we average the eigenvalues across all 500 simulations to construct a noise benchmark that accurately takes into account the time-dependence structure of our data. The results of running parallel analysis on the original Stock and Watson model are displayed in @fig-parallel1. The first eigenvalue has a magnitude of $2.750$, well above the AR(2) noise benchmark of $1.090$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.642$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1096,18 +1097,15 @@ n_print <- min(5, n)
 
 eig_table <- data.frame(
   Index     = 1:n_print,
-  Observed  = round(eig_obs[1:n_print], 4),
-  Benchmark = round(eig_sim[1:n_print], 4)
+  Observed  = round(eig_obs[1:n_print], 3),
+  Benchmark = round(eig_sim[1:n_print], 3)
 )
 
-cat("\n--- First", n_print, "Eigenvalues ---\n")
-print(eig_table, row.names = FALSE)
-
-# Determining the number of factors
-n_factors <- sum(eig_obs > eig_sim)
-cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
-
 # Plotting
+
+#| label: fig-parallel1
+#| fig-cap: "Parallel analysis with AR(2) simulated Noise, original Stock and Watson model."
+
 plot_pa <- tibble(
   Index     = 1:n,
   Observed  = eig_obs,
@@ -1120,30 +1118,20 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
                     color = Series, linetype = Series, shape = Series)) +
   geom_line(linewidth = 0.8) +
   geom_point(size = 2) +
-  geom_vline(xintercept = n_factors + 0.5, 
-             linetype = "dotted", color = "grey40") +
   scale_color_manual(values = c("Observed" = "steelblue", 
                                 "Benchmark" = "red3")) +
   scale_linetype_manual(values = c("Observed" = "solid", 
                                    "Benchmark" = "solid")) +
   scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
-  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
-           label = "keep", color = "grey40", size = 3.5) +
-  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
-           label = "discard", color = "grey40", size = 3.5) +
   labs(
     title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
-    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
-                       n_factors),
-    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
+    x = "Eigenvalue index", y = "Eigenvalue magnitude", color = NULL, 
     linetype = NULL, shape = NULL
   ) +
   theme_minimal() +
   theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 13))
+        plot.title = element_text(face = "bold", size = 12))
 ```
-
-The results of parallel analysis on the original Stock and Watson model are displayed in figure X. The first eigenvalue has a magnitude of around $2.7$, well above the AR(2) noise benchmark of approximately $1.1$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.65$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
 ## 3.2. Introducing More Indicators
 
@@ -1244,7 +1232,7 @@ y_raw <- df_clean %>%
 fit2 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
-The results of parallel analysis on the expanded dataset are reported in Figure X. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.1$ (versus a benchmark of $1.2$), and the second is around $2.6$ (against $1.1$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators.
+The results of parallel analysis on the expanded dataset are reported in @fig-parallel2. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.158$ (versus a benchmark of $1.197$), and the second is around $2.606$ (against $1.112$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators.
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1309,18 +1297,15 @@ n_print <- min(5, n)
 
 eig_table <- data.frame(
   Index     = 1:n_print,
-  Observed  = round(eig_obs[1:n_print], 4),
-  Benchmark = round(eig_sim[1:n_print], 4)
+  Observed  = round(eig_obs[1:n_print], 3),
+  Benchmark = round(eig_sim[1:n_print], 3)
 )
 
-cat("\n--- First", n_print, "Eigenvalues ---\n")
-print(eig_table, row.names = FALSE)
-
-# Determining the number of factors
-n_factors <- sum(eig_obs > eig_sim)
-cat("Number of factors suggested by parallel analysis:", n_factors, "\n")
-
 # Plotting
+
+#| label: fig-parallel2
+#| fig-cap: "Parallel analysis with AR(2) simulated Noise, augmented model."
+
 plot_pa <- tibble(
   Index     = 1:n,
   Observed  = eig_obs,
@@ -1333,30 +1318,22 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
                     color = Series, linetype = Series, shape = Series)) +
   geom_line(linewidth = 0.8) +
   geom_point(size = 2) +
-  geom_vline(xintercept = n_factors + 0.5, 
-             linetype = "dotted", color = "grey40") +
   scale_color_manual(values = c("Observed" = "steelblue", 
                                 "Benchmark" = "red3")) +
   scale_linetype_manual(values = c("Observed" = "solid", 
                                    "Benchmark" = "solid")) +
   scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
-  annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
-           label = "keep", color = "grey40", size = 3.5) +
-  annotate("text", x = n_factors + 1, y = max(eig_obs) * 0.95, 
-           label = "discard", color = "grey40", size = 3.5) +
   labs(
     title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
-    subtitle = sprintf("Suggested number of factors: %d (S&W benchmark simulation)", 
-                       n_factors),
-    x = "Eigenvalue index", y = "Eigenvalue", color = NULL, 
+    x = "Eigenvalue index", y = "Eigenvalue magnitude", color = NULL, 
     linetype = NULL, shape = NULL
   ) +
   theme_minimal() +
   theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 13))
+        plot.title = element_text(face = "bold", size = 12))
 ```
 
-As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit for actual GDP growth remains strong, with an $R^2$ of $0.759$ and an MSE of $0.282$, only marginally worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.277$. However, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.01$ against monthly *PCEPI* growth.
+As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit to actual GDP deteriorates to an $R^2$ of $0.711$ and an MSE of $0.336$, worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.276$. Moreover, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.011$ against monthly *PCEPI* growth.
 
 ```{r}
 ### MAPPING FACTOR TO GDP
@@ -1416,10 +1393,10 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+p1 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
   geom_line(linewidth = 0.5) +
   
-  # Set specific colors to easily distinguish the series
+  # Seting colors
   scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
@@ -1427,16 +1404,16 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
     title = "Actual vs. Fitted GDP (in-sample)",
     subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
     x = "Time",
-    y = "Quarterly GDP growth",
+    y = "Quarterly GDP growth (%)",
     color = NULL
   ) +
   
-  # Apply a clean, academic theme
+  # Applying a clean theme
   theme_minimal() +
   theme(
     legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "darkgrey", size = 11)
+    plot.title = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(color = "darkgrey", size = 10)
   )
 ```
 
@@ -1468,7 +1445,7 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
+p2 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
@@ -1487,9 +1464,11 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   theme_minimal() +
   theme(
     legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "darkgrey", size = 11)
+    plot.title = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(color = "darkgrey", size = 10)
   )
+
+p1 + p2
 ```
 
 The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ and $0.90$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely.
@@ -1499,7 +1478,7 @@ The factor loadings reported in Table X make the situation clearer. The four rea
 lambda_hat <- fit2$lambda$est
 tibble(
   Indicator = colnames(y_raw),
-  Group     = c(rep("Real", 4), rep("Price", 4)),
+  Group     = c(rep("Real", 3), rep("Price", 3)),
   Lambda    = lambda_hat
 )
 ```
