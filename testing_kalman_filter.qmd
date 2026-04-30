@@ -329,7 +329,7 @@ gdp_id <- "GDPC1"
 
 # Real economy
 real_ids <- c(
-  "IPMAN",   # Industrial Production
+  "IPMAN",    # Industrial Production
   "CMRMTSPL", # Manufacturing & Trade Sales
   "PAYEMS",   # Nonfarm Payrolls
   "W875RX1"   # Real Personal Income less Transfers 
@@ -393,7 +393,7 @@ y_raw <- df_clean %>%
 fit1 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
-As shown in @fig-fit1, empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of $0.276$, translating to a Root Mean Squared Error (RMSE) of roughly $0.526$ percentage points. This RMSE might seems elevated, but it's important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
+As shown in @fig-fit1, empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of the actual GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of $0.276$, translating to a Root Mean Squared Error (RMSE) of roughly $0.526$ percentage points. This RMSE might seems elevated, but it is important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
 
 ```{r}
 ### MAPPING FACTOR TO GDP ###
@@ -445,7 +445,7 @@ r_squared <- 1 - (ss_res / ss_tot)
 ### PLOTTING ###
 
 #| label: fig-fit1
-#| fig-cap: "Mapped Factor vs Actual GDP Quarterly Growth, Original Stock and Watson Model"
+#| fig-cap: "Fitted vs. actual GDP quarterly growth, original Stock and Watson Model"
 
 # Combining the data into a tibble
 plot_data <- tibble(
@@ -465,19 +465,21 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   
   # Adding titles and labels
   labs(
-    title = "In-Sample Estimation: Actual vs. Fitted GDP",
-    subtitle = sprintf("Performance Metrics: R-squared = %.3f | MSE = %.3f", r_squared, mse),
-    x = "Time (Index)", # <--- Update x-axis label
-    y = "GDP Growth (Log Difference)",
+    title = "Actual vs. fitted quarterly GDP percentage growth (in-sample performance)",
+    subtitle = sprintf("Performance metrics: R-squared = %.3f; MSE = %.3f", r_squared, mse),
+    x = "Time", 
+    y = "Quarterly GDP growth (%)",
     color = NULL
   ) +
   
   # Applying a cleaner theme
   theme_minimal() +
   theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 12),
-    plot.subtitle = element_text(color = "darkgrey", size = 10)
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle    = element_text(size = 11, hjust = 0.5),
+    axis.title       = element_text(size = 9.5),
+    axis.text        = element_text(size = 8)
   )
 ```
 
@@ -485,13 +487,13 @@ As reported in @tbl-fit1-estimates, all four indicators load positively on the e
 
 ```{r}
 #| label: tbl-fit1-estimates
-#| tbl-cap: "Maximum Likelihood Estimates of the Stock and Watson Model"
+#| tbl-cap: "Maximum likelihood estimates of the Stock and Watson model"
 
 # Building the table
 psi <- fit1$psi$est
 psi_se <- fit1$psi$se
 sd_vals <- fit1$sd$est^2
-sd_se <- 2 * fit1$sd$est * fit1$sd$se  # delta method
+sd_se <- 2 * fit1$sd$est * fit1$sd$se
 
 fmt <- function(x, s) paste0(sprintf("%.3f", x), " (", sprintf("%.3f", s), ")")
 
@@ -1124,13 +1126,19 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
                                    "Benchmark" = "solid")) +
   scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
   labs(
-    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
+    title = "Observed vs. simulated eigenvalues, original Stock and Watson model",
+    subtitle = "Parallel analysis with AR(2) errors",
     x = "Eigenvalue index", y = "Eigenvalue magnitude", color = NULL, 
     linetype = NULL, shape = NULL
   ) +
   theme_minimal() +
-  theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 12))
+  theme(
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle    = element_text(size = 11, hjust = 0.5),
+    axis.title       = element_text(size = 9.5),
+    axis.text        = element_text(size = 8)
+  )
 ```
 
 ## 3.2. Introducing More Indicators
@@ -1141,6 +1149,8 @@ We now extend the dataset by adding four indicators from the price side of the U
 -   CPILFESL (Consumer Price Index, all items less food and energy).
 -   PCEPI (Personal Consumption Expenditures Price Index).
 -   PPIACO (Producer Price Index, all commodities).
+
+Among these, *PCEPI* also serves as the target variable to evaluate the estimated factor's mapping to inflation. 
 
 ```{r}
 ### LOADING DATA
@@ -1232,7 +1242,7 @@ y_raw <- df_clean %>%
 fit2 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
-The results of parallel analysis on the expanded dataset are reported in @fig-parallel2. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.158$ (versus a benchmark of $1.197$), and the second is around $2.606$ (against $1.112$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators.
+The result of running parallel analysis on the augmented dataset is shown in @fig-parallel2. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.158$ (versus a benchmark of $1.197$), and the second is around $2.606$ (against $1.112$). All the other eigenvalues drop below the noise benchmark. Hence, this analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators.
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1324,16 +1334,22 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
                                    "Benchmark" = "solid")) +
   scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
   labs(
-    title = "Parallel Analysis: Observed vs. AR(2) Simulated Eigenvalues",
+    title = "Observed vs. simulated eigenvalues, augmented model",
+    subtitle = "Parallel analysis with AR(2) errors",
     x = "Eigenvalue index", y = "Eigenvalue magnitude", color = NULL, 
     linetype = NULL, shape = NULL
   ) +
   theme_minimal() +
-  theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", size = 12))
+  theme(
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle    = element_text(size = 11, hjust = 0.5),
+    axis.title       = element_text(size = 9.5),
+    axis.text        = element_text(size = 8)
+  )
 ```
 
-As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit to actual GDP deteriorates to an $R^2$ of $0.711$ and an MSE of $0.336$, worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.276$. Moreover, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.011$ against monthly *PCEPI* growth.
+As shown in @fig-fit2, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity, though with worse performance compared to the Stock and Watson model. Indeed, its fit to actual GDP growth deteriorates to an $R^2$ of $0.711$ and an MSE of $0.336$, against the baseline model's $R^2$ of $0.763$ and MSE of $0.276$. Interestingly, despite the inclusion of *PCEPI* in the indicator set, the estimated factor fails to capture inflation dynamics altogether, yielding an $R^2$ of just $0.011$ against monthly *PCEPI* growth.
 
 ```{r}
 ### MAPPING FACTOR TO GDP
@@ -1401,8 +1417,8 @@ p1 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHAN
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "Actual vs. Fitted GDP (in-sample)",
-    subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
+    title = "Actual vs. fitted GDP growth",
+    subtitle = sprintf("R-squared = %.3f; MSE = %.3f", r_squared, mse),
     x = "Time",
     y = "Quarterly GDP growth (%)",
     color = NULL
@@ -1411,9 +1427,11 @@ p1 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHAN
   # Applying a clean theme
   theme_minimal() +
   theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 12),
-    plot.subtitle = element_text(color = "darkgrey", size = 10)
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 11, hjust = 0.5),
+    plot.subtitle    = element_text(size = 10, hjust = 0.5),
+    axis.title       = element_text(size = 8),
+    axis.text        = element_text(size = 7)
   )
 ```
 
@@ -1453,39 +1471,72 @@ p2 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "Actual vs. Fitted Inflation (in-sample)",
-    subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
+    title = "Actual vs. fitted inflation growth",
+    subtitle = sprintf("R-squared = %.3f; MSE = %.3f", r_squared, mse),
     x = "Time",
     y = "Monthly inflation growth (%)",
     color = NULL
   ) +
   
-  # Apply a clean, academic theme
+  # Applying a cleaner theme
   theme_minimal() +
   theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 12),
-    plot.subtitle = element_text(color = "darkgrey", size = 10)
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 11, hjust = 0.5),
+    plot.subtitle    = element_text(size = 10, hjust = 0.5),
+    axis.title       = element_text(size = 8),
+    axis.text        = element_text(size = 7)
   )
+
+#| label: fig-fit2
+#| tbl-cap: "Fitted vs. actual GDP and inflation growth, misspecified augmented model."
 
 p1 + p2
 ```
 
-The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ and $0.90$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely.
+The factor loadings reported in @tbl-fit2-estimates make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.484$ and $0.967$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original business cycle factor, discarding most of the information brought by the price indicators.
 
 ```{r}
-# Extracting factor loadings
-lambda_hat <- fit2$lambda$est
-tibble(
-  Indicator = colnames(y_raw),
-  Group     = c(rep("Real", 3), rep("Price", 3)),
-  Lambda    = lambda_hat
+#| label: tbl-fit2-estimates
+#| tbl-cap: "Maximum likelihood estimates of the augmented model."
+
+indicators <- c("IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1",
+                "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
+
+lam    <- fit2$lambda$est
+lam_se <- fit2$lambda$se
+
+# rbind gives 2 rows x 8 cols — no transpose needed
+sw_table <- data.frame(
+  Parameter = c("$\\lambda_i$", ""),
+  rbind(
+    sprintf("%.3f", lam),
+    paste0("(", sprintf("%.3f", lam_se), ")")
+  ),
+  row.names = NULL
 )
+
+colnames(sw_table) <- c("", indicators)
+
+knitr::kable(sw_table,
+             align  = c("l", rep("c", 8)),
+             escape = FALSE) %>%
+  kableExtra::kable_styling(full_width = FALSE,
+                            bootstrap_options = c("striped", "hover")) %>%
+  kableExtra::add_header_above(c(" " = 1, "Coincident Indicators" = 8)) %>%
+  kableExtra::footnote(
+    general           = "Standard errors in parentheses.",
+    general_title     = "",
+    footnote_as_chunk = TRUE
+  )
 ```
 
-This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in Figure X, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.73$, and the ones in the price group range from $0.23$ to $0.92$. However, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
+This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in @fig-corr, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.76$, and the ones in the price group range from $0.24$ to $0.92$. However, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
 
 ```{r}
+#| label: fig-corr
+#| tbl-cap: "Correlation heatmap of the eight indicators included in the augmented model."
+
 R_obs <- cor(y_raw)
 ggcorrplot(R_obs,
            method   = "square",
@@ -1497,7 +1548,12 @@ ggcorrplot(R_obs,
   geom_hline(yintercept = 4.5, color = "grey40") +
   geom_vline(xintercept = 4.5, color = "grey40") +
   theme(axis.text.x = element_text(size = 8),
-        axis.text.y = element_text(size = 8))
+        axis.text.y = element_text(size = 8),
+        plot.title       = element_text(face = "bold", size = 11, hjust = 0.5),
+        plot.subtitle   = element_text(size = 10, hjust = 0.5),
+        axis.title       = element_text(size = 8),
+        axis.text        = element_text(size = 7)
+  )
 ```
 
 When estimating a single-factor model via maximum likelihood, the Kalman filter commits to the direction associated to the highest eigenvalue. Hence, the likelihood is maximized by estimating the latent factor that drives the real-activity indicators, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idiosyncratic error terms.
