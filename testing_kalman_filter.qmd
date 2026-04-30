@@ -27,6 +27,17 @@ execute:
 bibliography: references.bib
 ---
 
+```{r}
+### LIBRARIES ###
+
+library("tidyverse")
+library("readxl")
+library("tidyquant")
+library("psych")
+library("ggcorrplot")
+```
+
+
 # Abstract
 
 In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that co-movements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic single-factor model in which the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth [@S&W1988].
@@ -62,11 +73,11 @@ $$Y_{i,t} \perp\!\!\!\perp Y_{j,t} \mid F_t \quad \forall\, i \neq j$$
 
 Second, since both the factor and the errors follow an AR(2) process, given the state vector $h_t$ current indicators are conditionally independent of all future and past observations. Formally:
 
-$$y_t \perp\!\!\!\perp \{y_s\}_{s \neq t} \mid h_{t}$$
+$$Y_t \perp\!\!\!\perp \{Y_s\}_{s \neq t} \mid h_{t}$$
 
 Where:
 
-$$h_t = (f_t, f_{t-1}, e_{1,t}, e_{1,t-1}, \ldots, e_{n,t}, e_{n,t-1})'$$
+$$h_t = (f_t, f_{t-1}, e_{1,t}, e_{1,t-1}, \ldots, e_{n,t}, e_{n,t-1})$$
 ```{r kalman-system}
 ### SETUP ###
 
@@ -205,8 +216,8 @@ kalman <- function(th, y, n, r, TT, n_lam, h_dim, varQ) {
 # Setting starting values (0.5 for lambdas, 0.3 for AR(2) coefficients)
 make_startval <- function(y, n, r, n_lam) {
   lambda_init <- rep(0.5, n_lam) # lambdas
-  ar_f_init   <- rep(0.3, 2*r) # factor AR(2)
-  ar_e_init   <- rep(0.3, 2*n) # errors AR(2)
+  ar_f_init   <- rep(0.3, 2*r)   # factor AR(2)
+  ar_e_init   <- rep(0.3, 2*n)   # errors AR(2)
   sd_init     <- apply(y, 2, sd) # standard deviations
   c(lambda_init, ar_f_init, ar_e_init, sd_init)
 }
@@ -265,7 +276,7 @@ dfm <- function(data, r = 1, maxit = 2000) {
     lambda      = list(est = th_hat[idx_lam], se = se_hat[idx_lam]),
     phi         = list(est = th_hat[idx_phi], se = se_hat[idx_phi]),
     psi         = list(est = th_hat[idx_psi], se = se_hat[idx_psi]),
-    sigma       = list(est = th_hat[idx_sig], se = se_hat[idx_sig]),
+    sd          = list(est = th_hat[idx_sig], se = se_hat[idx_sig]),
     th_hat      = th_hat,
     se_hat      = se_hat
   )
@@ -291,22 +302,21 @@ The Kalman filter, however, requires the errors of the measurement equation $e_t
 After estimating the latent factor via the Kalman filter, we must rescale it to make it interpretable in terms of actual economic activity. To do so, we regress GDP onto the estimated factor by Ordinary Least Squares (OLS). This allows us to plot the estimated latent factor against GDP growth and calculate in-sample performance metrics, such as the coefficient of determination ($R^2$) and the Mean Squared Error (MSE).
 
 ```{r}
-### LIBRARIES
-
-library("tidyverse")
-library("readxl")
-library("tidyquant")
-
 ### LOADING DATA
 
-# FRED IDs:
-ids <- c(
-  "GDPC1",     # Real GDP
-  "INDPRO",    # Industrial Production
-  "CMRMTSPL",  # Manufacturing & Trade Sales
-  "PAYEMS",    # Nonfarm Payrolls
-  "W875RX1"    # Real Personal Income less Transfers 
+# GDP
+gdp_id <- "GDPC1"
+
+# Real economy
+real_ids <- c(
+  "INDPRO",   # Industrial Production
+  "CMRMTSPL", # Manufacturing & Trade Sales
+  "PAYEMS",   # Nonfarm Payrolls
+  "W875RX1"   # Real Personal Income less Transfers 
 )
+
+# All ids
+ids <- c(gdp_id, real_ids)
 
 # Defining path for local data cache (for rendering)
 data_file <- "fred_macro_data.rds"
@@ -337,8 +347,8 @@ df_aligned <- data_monthly %>%
 df_clean <- df_aligned %>%
   arrange(date) %>%
   mutate(
-    # Log-difference for the 4 monthly variables (lag = 1)
-    across(c(INDPRO, CMRMTSPL, PAYEMS, W875RX1), 
+    # Log-difference for the monthly variables (lag = 1)
+    across(all_of(c(real_ids)), 
            ~ (log(.x) - log(lag(.x, 1))) * 100),
     
     # Log-difference for the quarterly GDP (lag = 3)
@@ -346,8 +356,6 @@ df_clean <- df_aligned %>%
   ) %>%
   # Dropping the very first row since month-over-month lag creates an NA
   drop_na(PAYEMS)
-
-### DEFINING THE DATA ###
 
 # gdp data
 gdp <- df_clean %>%
@@ -366,31 +374,26 @@ fit1 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
 ```{r}
-fit1$lambda$est
-```
+### MAPPING FACTOR TO GDP ###
 
+factor <- fit1$factor[, 1]
 
-```{r}
-### CONVERTING FACTOR TO QUARTERLY GROWTH RATE ###
+TT <- nrow(y_raw)
 
-factor <- factor_hat[, 1]
-
+# Converting from monthly to quarterly
 factorQ <- (1/3) * factor[5:TT] +
   (2/3) * factor[4:(TT - 1)] +
   factor[3:(TT - 2)] +
   (2/3) * factor[2:(TT - 3)] +
   (1/3) * factor[1:(TT - 4)]
 
+# Downsampling
 i <- 1
 factgdp <- c()
 while (i < (TT - 4)) {
   factgdp <- c(factgdp, factorQ[i])
   i <- i + 3
 }
-```
-
-```{r}
-# Estimating the GDP
 
 # Defining the data
 y_gdp <- gdp
@@ -421,7 +424,7 @@ r_squared <- 1 - (ss_res / ss_tot)
 
 # Combining the data into a tibble
 plot_data <- tibble(
-  Index = 1:length(y_gdp), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Index = 1:length(y_gdp),
   Actual = as.vector(y_gdp),
   Fitted = as.vector(gdp_fitted)
 ) %>%
@@ -429,13 +432,13 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
-  geom_line(linewidth = 0.8) +
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
+  geom_line(linewidth = 0.5) +
   
-  # Set specific colors to easily distinguish the series
+  # Setting colors
   scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
   
-  # Add titles, labels, and dynamically inject the R-squared and MSE
+  # Adding titles and labels
   labs(
     title = "In-Sample Estimation: Actual vs. Fitted GDP",
     subtitle = sprintf("Performance Metrics: R-squared = %.3f | MSE = %.3f", r_squared, mse),
@@ -444,7 +447,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
     color = NULL
   ) +
   
-  # Apply a clean, academic theme
+  # Applying a cleaner theme
   theme_minimal() +
   theme(
     legend.position = "bottom",
@@ -963,48 +966,41 @@ In the standard static application, the idiosyncratic component is simulated as 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
 
-library(psych)
-
-psi_hat    <- extract_psi(opt_res$par, n, K)
-sigma2_hat <- extract_sigma(opt_res$par, n, K)^2
+TT <- nrow(y_raw)
+n <- ncol(y_raw)
 
 # COMPUTING THE EIGENVALUES OF THE FRED DATA
 
 # Correlation matrix of the actual data
-R_obs <- cor(y)
+R_obs <- cor(y_raw)
 
 # Extracting the eigenvalues
 eig_obs <- eigen(R_obs)$values
 
+# Extracting the estimated parameters
+psi_hat    <- matrix(fit1$psi$est, nrow = n, ncol = 2, byrow = TRUE)
+sigma2_hat <- fit1$sd$est^2
+
 # AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
 
-# Defining the simulation function
+# Defining the AR(2) simulation function
 ar2_null <- function(TT, n, psi, sigma2) {
   
-  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
-  # the stationary part of the process
-  burnin <- 50
-  TT_total <- TT + burnin
-  
-  # Simulate AR(2) errors
-  
   # Placeholder matrix
-  U <- matrix(0, nrow = TT_total, ncol = n)
+  U <- matrix(0, nrow = TT, ncol = n)
   
   # For loop to generate the errors with the estimated standard deviations
   for (i in 1:n) {
-    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
+    eps <- rnorm(TT, sd = sqrt(sigma2[i]))
     
     # For loop to generate the matrix of the simulated indicators without the factor
-    for (t in 3:TT_total) {
+    for (t in 3:TT) {
       U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
     }
   }
   
-  # Discarding the burn-in and rescaling
-  y_gen <- U[(burnin + 1):TT_total, ]
-  y_gen <- scale(y_gen)
-  return(y_gen)
+  # Rescaling
+  scale(U)
 }
 
 # MONTE CARLO SIMULATION
@@ -1053,13 +1049,13 @@ plot_pa <- tibble(
 ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
                     color = Series, linetype = Series, shape = Series)) +
   geom_line(linewidth = 0.8) +
-  geom_point(size = 3) +
+  geom_point(size = 2) +
   geom_vline(xintercept = n_factors + 0.5, 
              linetype = "dotted", color = "grey40") +
   scale_color_manual(values = c("Observed" = "steelblue", 
                                 "Benchmark" = "red3")) +
   scale_linetype_manual(values = c("Observed" = "solid", 
-                                   "Benchmark" = "dashed")) +
+                                   "Benchmark" = "solid")) +
   scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
   annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
            label = "keep", color = "grey40", size = 3.5) +
@@ -1088,15 +1084,7 @@ We now extend the dataset by adding four indicators from the price side of the U
 -   PCEPI (Personal Consumption Expenditures Price Index).
 -   PPIACO (Producer Price Index, all commodities).
 
-The results of parallel analysis on the expanded dataset are reported in Figure X. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.1$ (versus a benchmark of $1.2$), and the second is around $2.6$ (against $1.1$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators. 
-
 ```{r}
-### LIBRARIES
-
-library("tidyverse")
-library("readxl")
-library("tidyquant")
-
 ### LOADING DATA
 
 # FRED IDs
@@ -1136,9 +1124,6 @@ if (file.exists(data_file)) {
                      from = "1969-10-01", to = "2025-01-01")
   write_rds(raw_data, data_file)
 }
-
-raw_data <- raw_data %>%
-  mutate(date = floor_date(date, "month"))  # snap all dates to 1st of month
 
 # Pivoting data in wide format
 data_monthly <- raw_data %>%
@@ -1189,81 +1174,47 @@ y_raw <- df_clean %>%
 fit2 <- dfm(data = y_raw, r = 1, maxit = 2000)
 ```
 
-```{r}
-fit2$convergence
-```
 
-```{r}
-TT <- nrow(y_raw)
-```
-
-```{r}
-fit2$lambda$est
-```
-
-
-```{r}
-factor <- fit2$factor[, 1]
-
-factorQ <- (1/3) * factor[5:length(factor)] +
-  (2/3) * factor[4:(length(factor) - 1)] +
-  factor[3:(length(factor) - 2)] +
-  (2/3) * factor[2:(length(factor) - 3)] +
-  (1/3) * factor[1:(length(factor) - 4)]
-
-i <- 1
-factgdp <- c()
-while (i <= (TT - 4)) {
-  factgdp <- c(factgdp, factorQ[i])
-  i <- i + 3
-}
-```
+The results of parallel analysis on the expanded dataset are reported in Figure X. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.1$ (versus a benchmark of $1.2$), and the second is around $2.6$ (against $1.1$). This analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements in the original four indicators. 
 
 ```{r}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
 
-library(psych)
-
-psi_hat    <- extract_psi(opt_res$par, n, K)
-sigma2_hat <- extract_sigma(opt_res$par, n, K)^2
+TT <- nrow(y_raw)
+n <- ncol(y_raw)
 
 # COMPUTING THE EIGENVALUES OF THE FRED DATA
 
 # Correlation matrix of the actual data
-R_obs <- cor(y)
+R_obs <- cor(y_raw)
 
 # Extracting the eigenvalues
 eig_obs <- eigen(R_obs)$values
 
+# Extracting the estimated parameters
+psi_hat    <- matrix(fit2$psi$est, nrow = n, ncol = 2, byrow = TRUE)
+sigma2_hat <- fit2$sd$est^2
+
 # AR(2) SIMULATION USING ONLY IDIOSYNCRATIC ERRORS
 
-# Defining the simulation function
+# Defining the AR(2) simulation function
 ar2_null <- function(TT, n, psi, sigma2) {
   
-  # 50 observations of burn-in, which makes it so that the eigenvalues we estimate come from
-  # the stationary part of the process
-  burnin <- 50
-  TT_total <- TT + burnin
-  
-  # Simulate AR(2) errors
-  
   # Placeholder matrix
-  U <- matrix(0, nrow = TT_total, ncol = n)
+  U <- matrix(0, nrow = TT, ncol = n)
   
   # For loop to generate the errors with the estimated standard deviations
   for (i in 1:n) {
-    eps <- rnorm(TT_total, sd = sqrt(sigma2[i]))
+    eps <- rnorm(TT, sd = sqrt(sigma2[i]))
     
     # For loop to generate the matrix of the simulated indicators without the factor
-    for (t in 3:TT_total) {
+    for (t in 3:TT) {
       U[t, i] <- psi[i, 1] * U[t-1, i] + psi[i, 2] * U[t-2, i] + eps[t]
     }
   }
   
-  # Discarding the burn-in and rescaling
-  y_gen <- U[(burnin + 1):TT_total, ]
-  y_gen <- scale(y_gen)
-  return(y_gen)
+  # Rescaling
+  scale(U)
 }
 
 # MONTE CARLO SIMULATION
@@ -1312,13 +1263,13 @@ plot_pa <- tibble(
 ggplot(plot_pa, aes(x = Index, y = Eigenvalue, 
                     color = Series, linetype = Series, shape = Series)) +
   geom_line(linewidth = 0.8) +
-  geom_point(size = 3) +
+  geom_point(size = 2) +
   geom_vline(xintercept = n_factors + 0.5, 
              linetype = "dotted", color = "grey40") +
   scale_color_manual(values = c("Observed" = "steelblue", 
                                 "Benchmark" = "red3")) +
   scale_linetype_manual(values = c("Observed" = "solid", 
-                                   "Benchmark" = "dashed")) +
+                                   "Benchmark" = "solid")) +
   scale_shape_manual(values = c("Observed" = 16, "Benchmark" = 15)) +
   annotate("text", x = n_factors * 0.5, y = max(eig_obs) * 0.95, 
            label = "keep", color = "grey40", size = 3.5) +
@@ -1336,8 +1287,28 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
         plot.title = element_text(face = "bold", size = 13))
 ```
 
+As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit for actual GDP growth remains strong, with an $R^2$ of $0.759$ and an MSE of $0.282$, only marginally worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.277$. However, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.01$ against monthly *PCEPI* growth.
+
 ```{r}
-# Estimating the GDP
+### MAPPING FACTOR TO GDP
+
+factor <- fit2$factor[, 1]
+TT <- nrow(y_raw)
+
+# Converting from monthly to quarterly
+factorQ <- (1/3) * factor[5:TT] +
+  (2/3) * factor[4:(TT - 1)] +
+  factor[3:(TT - 2)] +
+  (2/3) * factor[2:(TT - 3)] +
+  (1/3) * factor[1:(TT - 4)]
+
+# Downsampling
+i <- 1
+factgdp <- c()
+while (i < (TT - 4)) {
+  factgdp <- c(factgdp, factorQ[i])
+  i <- i + 3
+}
 
 # Defining the data
 y_gdp <- gdp
@@ -1377,7 +1348,7 @@ plot_data <- tibble(
 
 # Generating the plot
 ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
-  geom_line(linewidth = 0.8) +
+  geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
   scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
@@ -1401,10 +1372,10 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
 ```
 
 ```{r}
-### MAPPING TO INFLATION (OLS) ###
+### MAPPING FACTOR TO INFLATION ###
 
-# Target inflation series (held-out, e.g. PCEPI log-diff)
-y_inf <- inflation   # your held-out series as a matrix
+# Target inflation series
+y_inf <- inflation 
 
 # OLS
 x <- cbind(1, factor)
@@ -1420,7 +1391,7 @@ r_squared  <- 1 - ss_res / ss_tot
 
 # Combining the data into a tibble
 plot_data <- tibble(
-  Index = 1:length(y_inf), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Index = 1:length(y_inf), 
   Actual = as.vector(y_inf),
   Fitted = as.vector(inf_fitted)
 ) %>%
@@ -1428,8 +1399,8 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
-  geom_line(linewidth = 0.8) +
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
+  geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
   scale_color_manual(values = c("Actual" = "dodgerblue3", "Fitted" = "red3")) +
@@ -1452,15 +1423,13 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
-As shown in Figure X, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity well. Its fit for actual GDP growth remains strong, with an $R^2$ of $0.759$ and an MSE of $0.282$, only marginally worse than the baseline model's $R^2$ of $0.763$ and MSE of $0.277$. However, despite including *PCEPI* in the indicator set, the estimated factor fails to capture inflation, yielding an $R^2$ of just $0.01$ against monthly *PCEPI* growth.
-
 The factor loadings reported in Table X make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.52$ and $0.90$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original Stock and Watson factor, discarding the price information entirely. 
 
 ```{r}
 # Extracting factor loadings
-lambda_hat <- opt_res$par[1:n]
+lambda_hat <- fit2$lambda$est
 tibble(
-  Indicator = colnames(y),
+  Indicator = colnames(y_raw),
   Group     = c(rep("Real", 4), rep("Price", 4)),
   Lambda    = lambda_hat
 )
@@ -1469,9 +1438,7 @@ tibble(
 This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in Figure X, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.73$, and the ones in the price group range from $0.23$ to $0.92$. However, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
 
 ```{r}
-library(ggcorrplot)
-
-R_obs <- cor(y)
+R_obs <- cor(y_raw)
 ggcorrplot(R_obs,
            method   = "square",
            type     = "full",
@@ -1492,70 +1459,29 @@ When estimating a single-factor model via maximum likelihood, the Kalman filter 
 After re-estimating the model under the correct two-factor specification, the Kalman filter recovers both latent factors. As shown in Figure X, *factor 1* tracks real economic activity closely, yielding an $R^2$ of $0.764$ and an MSE of $0.276$ against quarterly GDP growth, almost identical to the original Stock and Watson model ($R^2 = 0.763$ and $MSE = 0.277$). Meanwhile, *factor 2* now maps well to price pressures, yielding an $R^2$ of $0.926$ and an MSE of $0.005$ against monthly PCEPI inflation.
 
 ```{r}
-### LOADING DATA
-
-gdp_id <- "GDPC1"
-real_ids <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1")
-price_ids <- c("CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
-ids <- c(gdp_id, real_ids, price_ids)
-
-data_file <- "fred_macro_data2.rds"
-if (file.exists(data_file)) {
-  raw_data <- read_rds(data_file)
-} else {
-  raw_data <- tq_get(ids, get = "economic.data",
-                     from = "1969-10-01", to = "2025-01-01")
-  write_rds(raw_data, data_file)
-}
-
-raw_data <- raw_data %>% mutate(date = floor_date(date, "month"))
-
-data_monthly <- raw_data %>%
-  pivot_wider(names_from = symbol, values_from = price) %>%
-  arrange(date)
-
-df_aligned <- data_monthly %>%
-  arrange(date) %>%
-  mutate(GDPC1 = lag(GDPC1, 2))
-
-df_clean <- df_aligned %>%
-  arrange(date) %>%
-  mutate(
-    across(all_of(c(real_ids, price_ids)),
-           ~ (log(.x) - log(lag(.x, 1))) * 100),
-    GDPC1 = (log(GDPC1) - log(lag(GDPC1, 3))) * 100
-  ) %>%
-  drop_na(PAYEMS)
-
-# Targets (held out for OLS mapping step)
-gdp       <- df_clean %>% select(GDPC1) %>% drop_na(GDPC1) %>% as.matrix()
-inflation <- df_clean %>% select(PCEPI) %>% drop_na(PCEPI) %>% as.matrix()
-
-# All 8 indicators enter the Kalman filter together (PCEPI included)
-# Ordering: INDPRO, CMRMTSPL, PAYEMS, W875RX1, CPIAUCSL, CPILFESL, PCEPI, PPIACO
-y_raw <- df_clean %>% select(-date, -GDPC1) %>% as.matrix()
-
 fit3 <- dfm(data = y_raw, r = 2)
-
-factor_real  <- fit3$factor[, 1]
-factor_price <- fit3$factor[, 2]
-
-TT <- nrow(y_raw)
-
-### CONVERTING REAL FACTOR TO QUARTERLY GROWTH RATE ###
-
-factorQ <- (1/3) * factor_real[5:length(factor_real)] +
-           (2/3) * factor_real[4:(length(factor_real) - 1)] +
-                   factor_real[3:(length(factor_real) - 2)] +
-           (2/3) * factor_real[2:(length(factor_real) - 3)] +
-           (1/3) * factor_real[1:(length(factor_real) - 4)]
-
-i <- 1; factgdp <- c()
-while (i <= (TT - 4)) { factgdp <- c(factgdp, factorQ[i]); i <- i + 3 }
 ```
 
 ```{r}
-# Estimating the GDP
+### MAPPING FACTOR TO GDP
+
+factor <- fit3$factor[, 1]
+TT <- nrow(y_raw)
+
+# Converting from monthly to quarterly
+factorQ <- (1/3) * factor[5:TT] +
+  (2/3) * factor[4:(TT - 1)] +
+  factor[3:(TT - 2)] +
+  (2/3) * factor[2:(TT - 3)] +
+  (1/3) * factor[1:(TT - 4)]
+
+# Downsampling
+i <- 1
+factgdp <- c()
+while (i < (TT - 4)) {
+  factgdp <- c(factgdp, factorQ[i])
+  i <- i + 3
+}
 
 # Defining the data
 y_gdp <- gdp
@@ -1603,9 +1529,9 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
     title = "Actual vs. Fitted GDP (in-sample)",
-    subtitle = sprintf("R-squared = %.3f | MSE = %.3f", r_squared, mse),
-    x = "Time", # <--- Update x-axis label
-    y = "Quarterly GDP growth (%)",
+    subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
+    x = "Time",
+    y = "Quarterly GDP growth",
     color = NULL
   ) +
   
@@ -1619,13 +1545,15 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
 ```
 
 ```{r}
-### MAPPING TO INFLATION (OLS) ###
+### MAPPING FACTOR TO INFLATION ###
 
-# Target inflation series (held-out, e.g. PCEPI log-diff)
-y_inf <- inflation   # your held-out series as a matrix
+factinf <- fit3$factor[, 2]
+
+# Target inflation series
+y_inf <- inflation 
 
 # OLS
-x <- cbind(1, factor_price)
+x <- cbind(1, factinf)
 b <- solve(t(x) %*% x) %*% t(x) %*% y_inf
 
 ### IN-SAMPLE PERFORMANCE ###
@@ -1638,7 +1566,7 @@ r_squared  <- 1 - ss_res / ss_tot
 
 # Combining the data into a tibble
 plot_data <- tibble(
-  Index = 1:length(y_inf), # <--- ADD THIS: Creates a numeric sequence from 1 to T
+  Index = 1:length(y_inf), 
   Actual = as.vector(y_inf),
   Fitted = as.vector(inf_fitted)
 ) %>%
@@ -1646,7 +1574,7 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
@@ -1655,7 +1583,7 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
     title = "Actual vs. Fitted Inflation (in-sample)",
-    subtitle = sprintf("R-squared = %.3f | MSE = %.3f", r_squared, mse),
+    subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
     x = "Time",
     y = "Monthly inflation growth (%)",
     color = NULL
@@ -1670,38 +1598,46 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   )
 ```
 
+
 Looking at the loading estimates reported in Table X, *factor 1* indeed loads heavily on real-activity indicators (between $0.532$ and $0.899$), while assigning loadings close to zero to all four price indicators (between $0.044$ and $0.119$). On the other hand, *factor 2* does exactly the opposite, loading strongly on price indicators (between $0.218$ and $0.703$) while assigning near-zero loadings to the real-activity ones (between $-0.101$ and $0.066$).
-
-```{r}
-fit3$lambda$est
-```
-
 
 ```{r}
 ### EXTRACTING FACTOR LOADINGS ###
 
-Lambda  <- extract_loadings(opt_res$par, n, K)
+lambda_est <- fit3$lambda$est
+se_est     <- fit3$lambda$se
+
+n <- ncol(y_raw)
+r <- 2
+
+# Reconstructing the lambda matrix with the triangular constraints
+Lambda     <- matrix(0, nrow = n, ncol = r)
+se_Lambda  <- matrix(NA,  nrow = n, ncol = r)
+idx <- 1
+for (j in 1:r) {
+  nf <- n - j + 1 
+  Lambda[j:n, j]    <- lambda_est[idx:(idx + nf - 1)]
+  se_Lambda[j:n, j] <- se_est[idx:(idx + nf - 1)]
+  idx <- idx + nf
+}
+
 lambda1 <- Lambda[, 1]
 lambda2 <- Lambda[, 2]
 
-# Combine into a readable table
+# Setting indicator names
 indicator_names <- c("INDPRO", "CMRMTSPL", "PAYEMS", "W875RX1",
                      "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
 
+# Returning the loadings
 loadings_df <- data.frame(
-  Indicator = indicator_names,
-  Lambda1   = round(lambda1, 3),   # real activity factor
-  Lambda2   = round(lambda2, 3)    # price factor
+  Indicator  = indicator_names,
+  Lambda1    = round(lambda1, 3),
+  Lambda2    = round(lambda2, 3),
+  SE_Lambda1 = round(se_Lambda[, 1], 3),
+  SE_Lambda2 = round(se_Lambda[, 2], 3)   # NA for the fixed zero in row 1
 )
 
 print(loadings_df)
-
-# Standard errors for the loadings (same slices from std_err)
-se_lambda1 <- std_err[1:n]
-se_lambda2 <- c(NA, std_err[(n + 1):(2 * n - 1)])  # NA for the fixed zero
-
-loadings_df$SE_Lambda1 <- round(se_lambda1, 3)
-loadings_df$SE_Lambda2 <- round(se_lambda2, 3)
 ```
 
 # Bibliography
