@@ -44,11 +44,11 @@ library("patchwork")
 
 In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that co-movements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic single-factor model in which the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth [@S&W1988].
 
-This project empirically tests the Kalman filter under two different forms of misspecification, departing from the original Stock and Watson assumptions. We begin by replicating the model on more recent data to establish a performance benchmark, confirming that the original model yields a latent factor that continues to track GDP growth well, with an $R^2$ of $0.763$ and MSE of $0.277$.
+This project empirically tests the Kalman filter under two different forms of misspecification, departing from the original Stock and Watson assumptions. We begin by replicating the model on more recent data to establish a performance benchmark, confirming that the original model yields a latent factor that continues to track GDP growth well, with an $R^2$ of $0.763$ and MSE of $0.276$.
 
 Next, we assess the robustness of the Kalman filter to violation of the Gaussianity assumption. Since macroeconomic data frequently exhibits heavy tailed and asymmetric behaviors, we simulate economies under progressively more elliptical and skewed distributions. We find that convergence to the true latent factor is faster under Gaussian errors and slows as distributions become more elliptical or skewed. However, the Kalman filter continues to recover the true factor in large samples across all specifications.
 
-Finally, we expand the number of indicators, including price-side variables and therefore introducing a second latent factor into the data-generating process. Estimating a single-factor model on this augmented dataset, we find that the Kalman filter recovers only the real-activity factor, assigning loadings close to zero to all price indicators. After re-estimating the model under the correct two-factor specification, the Kalman filter successfully recovers both the real-activity factor and price-pressure factor, yielding an $R^2$ of $0.764$ against GDP growth and $0.926$ against PCEPI inflation.
+Finally, we expand the number of indicators, including price-side variables and therefore introducing a second latent factor into the data-generating process. Estimating a single-factor model on this augmented dataset, we find that the Kalman filter recovers only the real-activity factor, assigning loadings close to zero to all price indicators. After re-estimating the model under the correct two-factor specification, the Kalman filter successfully recovers both the real-activity factor and price-pressure factor, yielding an $R^2$ of $0.761$ against GDP growth and $0.732$ against PCEPI inflation.
 
 # 1. The Stock & Watson model
 
@@ -86,11 +86,11 @@ knitr::include_graphics("images/S&W_model.png")
 
 Notice that this model assumes two conditional independence statements. First, the four indicators are cross-sectionally conditionally independent given the latent factor, meaning that once the common factor is known, knowing one indicator provides no additional information about the others. Formally:
 
-$$Y_{i,t} \perp\!\!\!\perp Y_{j,t} \mid F_t \quad \forall\, i \neq j$$
+$$y_{i,t} \perp\!\!\!\perp y_{j,t} \mid f_t \quad \forall\, i \neq j$$
 
 Second, since both the factor and the errors follow an AR(2) process, given the state vector $h_t$ current indicators are conditionally independent of all future and past observations. Formally:
 
-$$Y_t \perp\!\!\!\perp \{Y_s\}_{s \neq t} \mid h_{t}$$
+$$y_t \perp\!\!\!\perp \{y_s\}_{s \neq t} \mid h_{t}$$
 
 Where:
 
@@ -1030,7 +1030,9 @@ In this chapter we empirically examine how the Kalman filter behaves when the nu
 
 Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
 
-In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng [@BaiNg2002], which minimize unexplained variance while applying a penalty for each additional factor. However, this criteria is derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Indeed, as Bai and Ng note, *"When* $min\{N, T\}$ is 40 or larger, the proposed tests give precise estimates of the number of factors. Since our theory is based on large $N$ and large $T$, it is not surprising that for very small $N$ or $T$, the proposed criteria are inadequate.". Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors.
+In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng [@BaiNg2002], which minimize unexplained variance while applying a penalty for each additional factor. However, this criteria is derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Indeed, as Bai and Ng note: *"When* $min\{N, T\}$ *is 40 or larger, the proposed tests give precise estimates of the number of factors. Since our theory is based on large* $N$ *and large* $T$*, it is not surprising that for very small* $N$ *or* $T$*, the proposed criteria are inadequate.".*
+
+Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors.
 
 We therefore use parallel analysis, originally proposed by Horn [@Horn1965] to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
 
@@ -1150,7 +1152,7 @@ We now extend the dataset by adding four indicators from the price side of the U
 -   PCEPI (Personal Consumption Expenditures Price Index).
 -   PPIACO (Producer Price Index, all commodities).
 
-Among these, *PCEPI* also serves as the target variable to evaluate the estimated factor's mapping to inflation. 
+Among these, *PCEPI* also serves as the target variable to evaluate the estimated factor's mapping to inflation.
 
 ```{r}
 ### LOADING DATA
@@ -1498,7 +1500,7 @@ The factor loadings reported in @tbl-fit2-estimates make the situation clearer. 
 
 ```{r}
 #| label: tbl-fit2-estimates
-#| tbl-cap: "Maximum likelihood estimates of the augmented model."
+#| tbl-cap: "Maximum likelihood estimates of the misspecified augmented model."
 
 indicators <- c("IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1",
                 "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
@@ -1531,7 +1533,13 @@ knitr::kable(sw_table,
   )
 ```
 
-This outcome follows from the covariance structure of the data. Indeed, the leading eigenvector points in the direction of maximum variance, with the corresponding eigenvalue measuring the total variance explained along that direction [@Jolliffe2002]. Looking at the correlation matrix reported in @fig-corr, the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.76$, and the ones in the price group range from $0.24$ to $0.92$. However, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$. Therefore, the two groups move in different directions.
+To explain this outcome, we draw a parallel to Probabilistic Principal Component Analysis (PPCA). Simplifying to a static cross-sectional case, our measurement equation reduces to $y_t = \lambda f_{t} + e_{t}$, or, in matrix notation, $y = \Lambda f + e$. As shown by [@tippingbishop1999], when $\mathbf{y} \sim \mathcal{N}(\mathbf{0}, \mathbf{C})$, with $C = \mathbf{\Lambda} \mathbf{\Lambda}^{T} + \sigma^2 I$, then the likelihood is maximized when:
+
+$$ \mathbf{\Lambda_{ML}} = \mathbf{U}(\mathbf{D} - \sigma^2 \mathbf{I}) ^{1/2}\mathbf{R} $$
+
+where the $q$ column vectors in the $N \times q$ matrix $\mathbf{U}$ are the principal eigenvectors of the sample covariance matrix $\mathbf{S}$, with corresponding eigenvalues $d_1, \ldots, d_q$ in the $q \times q$ diagonal matrix $\mathbf{D}$, and $\mathbf{R}$ is an arbitrary $q \times q$ orthogonal rotation matrix. Under our single-factor specification ($q = 1$), the rotation matrix vanishes and the expression collapses to:
+
+$$ \mathbf{\lambda_{ML}} = \mathbf{u}(d - \sigma^2)^{1/2} $$ Since $\mathbf{u}(d - \sigma^2)^{1/2}$ is a scalar, the direction of $\mathbf{\lambda_{ML}}$ is entirely determined by the leading eigenvector $\mathbf{u}$ of the sample covariance matrix $\mathbf{S}$, which loads on the block associated to the largest eigenvalue. As reported in @fig-corr, we have an approximately two-block sample covariance matrix structure, where the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.76$, and the ones in the price group range from $0.24$ to $0.92$. Moreover, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$, suggesting that the two groups are uncorrelated. Given that the Maximum Likelihood Estimator in this case maximizes whichever direction corresponds to the highest eigenvalue, the Kalman filter in this case recovers the business cycle factor, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idiosyncratic error terms.
 
 ```{r}
 #| label: fig-corr
@@ -1556,15 +1564,13 @@ ggcorrplot(R_obs,
   )
 ```
 
-When estimating a single-factor model via maximum likelihood, the Kalman filter commits to the direction associated to the highest eigenvalue. Hence, the likelihood is maximized by estimating the latent factor that drives the real-activity indicators, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idiosyncratic error terms.
-
 ## 3.3. Re-estimating with the correct specification
-
-After re-estimating the model under the correct two-factor specification, the Kalman filter recovers both latent factors. As shown in Figure X, *factor 1* tracks real economic activity closely, yielding an $R^2$ of $0.764$ and an MSE of $0.276$ against quarterly GDP growth, almost identical to the original Stock and Watson model ($R^2 = 0.763$ and $MSE = 0.277$). Meanwhile, *factor 2* now maps well to price pressures, yielding an $R^2$ of $0.926$ and an MSE of $0.005$ against monthly PCEPI inflation.
 
 ```{r}
 fit3 <- dfm(data = y_raw, r = 2)
 ```
+
+After re-estimating the model under the correct two-factor specification, the Kalman filter recovers both latent factors. As shown in @fig-fit3, *factor 1* tracks again real economic activity closely, yielding an $R^2$ of $0.761$ and an MSE of $0.278$ against quarterly GDP growth, almost identical to the original Stock and Watson model ($R^2 = 0.763$ and $MSE = 0.276$). Meanwhile, *factor 2* now maps well to price pressures, yielding an $R^2$ of $0.732$ and an MSE of $0.019$ against monthly *PCEPI* inflation.
 
 ```{r}
 ### MAPPING FACTOR TO GDP
@@ -1624,7 +1630,7 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
+p1 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x = Index
   geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
@@ -1632,19 +1638,21 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) + # <--- CHANGE x =
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "Actual vs. Fitted GDP (in-sample)",
+    title = "Actual vs. fitted GDP growth",
     subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
     x = "Time",
-    y = "Quarterly GDP growth",
+    y = "Quarterly GDP growth (%)",
     color = NULL
   ) +
   
   # Apply a clean, academic theme
   theme_minimal() +
   theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "darkgrey", size = 11)
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 11, hjust = 0.5),
+    plot.subtitle    = element_text(size = 10, hjust = 0.5),
+    axis.title       = element_text(size = 8),
+    axis.text        = element_text(size = 7)
   )
 ```
 
@@ -1678,7 +1686,7 @@ plot_data <- tibble(
   pivot_longer(cols = c(Actual, Fitted), names_to = "Series", values_to = "Value")
 
 # Generating the plot
-ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
+p2 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   geom_line(linewidth = 0.5) +
   
   # Set specific colors to easily distinguish the series
@@ -1686,61 +1694,78 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   
   # Add titles, labels, and dynamically inject the R-squared and MSE
   labs(
-    title = "Actual vs. Fitted Inflation (in-sample)",
+    title = "Actual vs. fitted inflation growth",
     subtitle = sprintf("R-squared = %.3f, MSE = %.3f", r_squared, mse),
     x = "Time",
-    y = "Monthly inflation growth (%)",
+    y = "Monthly inflation growth",
     color = NULL
   ) +
   
   # Apply a clean, academic theme
   theme_minimal() +
   theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "darkgrey", size = 11)
+    legend.position  = "bottom",
+    plot.title       = element_text(face = "bold", size = 11, hjust = 0.5),
+    plot.subtitle    = element_text(size = 10, hjust = 0.5),
+    axis.title       = element_text(size = 8),
+    axis.text        = element_text(size = 7)
   )
+
+#| label: fig-fit3
+#| tbl-cap: "Fitted vs. actual GDP and inflation growth, correctly specified augmented model."
+
+p1 + p2
 ```
 
-Looking at the loading estimates reported in Table X, *factor 1* indeed loads heavily on real-activity indicators (between $0.532$ and $0.899$), while assigning loadings close to zero to all four price indicators (between $0.044$ and $0.119$). On the other hand, *factor 2* does exactly the opposite, loading strongly on price indicators (between $0.218$ and $0.703$) while assigning near-zero loadings to the real-activity ones (between $-0.101$ and $0.066$).
+As reported in @tbl-fit3-estimates, *factor 1* indeed loads heavily on the real-activity indicators (between $0.528$ and $0.924$), while assigning loadings near zero to all four price indicators (between $0.074$ and $0.161$). Conversely, *factor 2* loads strongly on price indicators (between $0.195$ and $0.734$) while assigning near-zero loadings to the real-activity ones (between $-0.151$ and $0.050$).
+
+To achieve identification, we impose a lower-triangular restriction on the loading matrix $\mathbf{\Lambda}$. This is because a factor model $\mathbf{y} = \mathbf{\Lambda}\mathbf{f} + \mathbf{e}$ is invariant to orthogonal rotations $\mathbf{Q}$, as:
+
+$$
+(\mathbf{\Lambda}\mathbf{Q})(\mathbf{Q}^\top \mathbf{f}) = \mathbf{\Lambda}(\mathbf{Q}\mathbf{Q}^\top)\mathbf{f} = \mathbf{\Lambda}\mathbf{I}\mathbf{f} = \mathbf{\Lambda}\mathbf{f}
+$$
+
+Hence, infinitely many rotations of the same factor model produce the same likelihood and the model is unidentified without additional constraints. We therefore set the upper-right triangle of $\mathbf{\Lambda}$ to zero, which for two factors requires setting $\frac{q(q-1)}{2} = \frac{2(2-1)}{2} = 1$ restriction [@gewekezhou1996]. Consistently with this, we set the loading of *IPMAN* on *factor 2* to zero by construction.
 
 ```{r}
-### EXTRACTING FACTOR LOADINGS ###
+#| label: tbl-fit3-estimates
+#| tbl-cap: "Maximum likelihood estimates of the correctly specified two-factor model."
 
-lambda_est <- fit3$lambda$est
-se_est     <- fit3$lambda$se
+indicators <- c("IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1",
+                "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
 
-n <- ncol(y_raw)
-r <- 2
+# Extracting loadings
+params_est <- unlist(fit3$lambda$est)
+params_se  <- unlist(fit3$lambda$se)
 
-# Reconstructing the lambda matrix with the triangular constraints
-Lambda     <- matrix(0, nrow = n, ncol = r)
-se_Lambda  <- matrix(NA,  nrow = n, ncol = r)
-idx <- 1
-for (j in 1:r) {
-  nf <- n - j + 1 
-  Lambda[j:n, j]    <- lambda_est[idx:(idx + nf - 1)]
-  se_Lambda[j:n, j] <- se_est[idx:(idx + nf - 1)]
-  idx <- idx + nf
-}
+# Reconstructing the matrices
+lam <- matrix(0, nrow = 8, ncol = 2)
+lam[, 1] <- params_est[1:8]   # Factor 1 loadings
+lam[, 2] <- c(0, params_est[9:15])  # Factor 2 loadings
 
-lambda1 <- Lambda[, 1]
-lambda2 <- Lambda[, 2]
+lam_se <- matrix(0, nrow = 8, ncol = 2)
+lam_se[, 1] <- params_se[1:8]
+lam_se[, 2] <- c(0, params_se[9:15])
 
-# Setting indicator names
-indicator_names <- c("IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1",
-                     "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
-
-# Returning the loadings
-loadings_df <- data.frame(
-  Indicator  = indicator_names,
-  Lambda1    = round(lambda1, 3),
-  Lambda2    = round(lambda2, 3),
-  SE_Lambda1 = round(se_Lambda[, 1], 3),
-  SE_Lambda2 = round(se_Lambda[, 2], 3)   # NA for the fixed zero in row 1
+# Creating the data frame
+sw_table <- data.frame(
+  Parameter = c("$\\lambda_{i,1}$", "", "$\\lambda_{i,2}$", ""),
+  rbind(
+    sprintf("%.3f", lam[, 1]),
+    paste0("(", sprintf("%.3f", lam_se[, 1]), ")"),
+    sprintf("%.3f", lam[, 2]),
+    paste0("(", sprintf("%.3f", lam_se[, 2]), ")")
+  )
 )
 
-print(loadings_df)
+colnames(sw_table) <- c("", indicators)
+
+# Render table
+knitr::kable(sw_table, align = c("l", rep("c", 8)), escape = FALSE) %>%
+  kableExtra::kable_styling(full_width = FALSE) %>%
+  kableExtra::add_header_above(c(" " = 1, "Coincident Indicators" = 8)) %>%
+  kableExtra::footnote(general = "Standard errors in parentheses. IPMAN Factor 1 fixed to 0.",
+                       general_title = "", footnote_as_chunk = TRUE)
 ```
 
 # Bibliography
