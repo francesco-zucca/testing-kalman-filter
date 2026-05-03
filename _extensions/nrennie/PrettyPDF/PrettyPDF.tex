@@ -40,17 +40,30 @@
 
 %% 2. REMOVED \sffamily from these definitions to ensure Charter is used
 \titleformat{\subsection}
-  {\Large\bfseries}{\thesection}{1em}{}[{\titlerule[0.8pt]}]
+  {\Large\bfseries}{\thesubsection}{1em}{}
   
+% left align title (now centered on a dedicated front page)
 \makeatletter
 \renewcommand{\maketitle}{
-\bgroup\setlength{\parindent}{0pt}
+\begin{titlepage} 
+\vspace*{1cm} % Slight top padding
+
 \begin{center}
-  {\huge\bfseries\color{dark} \@title} \vspace{0.3cm} \newline
-  {\Large {\@subtitle}} \newline
-  {\@author} \newline
-  {\@date}
-\end{center}\egroup
+  % --- Header: Institution, Course, and Professor ---
+  {\Large Barcelona School of Economics (BSE)} \\[0.4cm]
+  {\large Advanced Techniques in Applied Economics (Professor Piotr Zwiernik)} \\[8cm]
+  
+  % --- Main Title and Subtitle ---
+  {\fontsize{22}{26}\selectfont\bfseries\color{dark} \@title} \\[0.8cm]
+  {\LARGE \@subtitle}
+
+\end{center}
+
+\vfill % Pushes everything below this to the very bottom
+
+% --- Footer: Left and Right alignment ---
+\noindent {\large \@author} \hfill {\large \@date}
+
+\end{titlepage}
 }
 \makeatother
-
