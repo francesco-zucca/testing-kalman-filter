@@ -75,9 +75,9 @@ Finally, in @sec-three we expand the number of indicators, including price-side 
 
 \newpage
 
-# The Stock & Watson model {#sec-one}
+# The Stock and Watson model {#sec-one}
 
-We first replicate the model proposed by Stock and Watson. Their model assumes that the comovements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. The included indicators are:
+We first replicate the model proposed by Stock and Watson. Their model assumes that the co-movements of four macroeconomic indicators are driven by a single, unobserved latent factor which represents the overall business cycle. The included indicators are:
 
 -   IPMAN (Industrial Production: Manufacturing).
 -   CMRMTSPL (Real Manufacturing and Trade Industries Sales).
@@ -427,7 +427,7 @@ if (file.exists('results/stock_watson.RData')){
 }
 ```
 
-As shown in @fig-fit1, empirical results demonstrate the strong explanatory power of the model proposed by Stock & Watson. The mapped factor explains approximately 76% of the total variance of actual quarterly GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of $0.276$, translating to a Root Mean Squared Error (RMSE) of roughly $0.526$ percentage points. This RMSE might seem elevated, but it is important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
+As shown in @fig-fit1, empirical results demonstrate the strong explanatory power of the model proposed by Stock and Watson. The mapped factor explains approximately 76% of the total variance of actual quarterly GDP growth ($R^2 = 0.763$ ). Moreover, the model yields an in-sample MSE of $0.276$, translating to a Root Mean Squared Error (RMSE) of roughly $0.526$ percentage points. This RMSE might seem elevated, but it is important to note that our dataset includes periods of extreme macroeconomic volatility, such as the 2008 and COVID-19 crises, which inflate the error metrics.
 
 ```{r factor to GDP}
 ### MAPPING FACTOR TO GDP ###
@@ -672,7 +672,7 @@ The reason for this is that under a misspecified likelihood, the Kalman gain is 
 
 [^geweke]: @geweke1993 specifically tests on fourteen macroeconomic indicators including Industrial Production, Employment, and Real GNP, finding overwhelmingly positive evidence against normality at decreasing degrees of freedom ($\nu = 20, 10, 5, 3, 1$), in favor of student-t errors at low-to-moderate degrees of freedom. This motivates our decision to use student-t and naturally skew-t as distributional assumptions away from normality, with our degrees of freedom chosen as $\nu = 5$ in the simulations.
 
-To better understand this phenomenom, we generate synthetic data based on our coefficient estimates derived from @sec-mapping-factor that increasingly diverge from normality. We first understand the behavior of the efficient parameters derived under Gaussian distribution in @sec-gaussian-dist, after which we move into a typical finite-sample distribution of student-t in @sec-student-t-dist, and finally we explore more complex distributions such as skew-t with varying degrees of skew in @sec-skew-t-dist to understand where exactly the filter breaks down.
+To better understand this phenomenon, we generate synthetic data based on our coefficient estimates derived from @sec-mapping-factor that increasingly diverge from normality. We first understand the behavior of the efficient parameters derived under Gaussian distribution in @sec-gaussian-dist, after which we move into a typical finite-sample distribution of student-t in @sec-student-t-dist, and finally we explore more complex distributions such as skew-t with varying degrees of skew in @sec-skew-t-dist to understand where exactly the filter breaks down.
 
 ## Gaussian distribution {#sec-gaussian-dist}
 
@@ -1016,7 +1016,7 @@ However, the trajectory is notably more volatile relative to both the Gaussian a
 
 The skew-t result with $\alpha = 5$ recovers the factor surprisingly well at a large sample size. An interesting extension would be to understand at exactly what skew parameter value does the skew-t become too extreme to consistently recover the factor. To explore this, we again run our simulation on skew-t generated data, this time with increasing, positive skew values: $\alpha = 1, 3, 5, 10, 20, 50$. We conduct a single iteration of the MC simulation for our array of values spanning from $n=10, \dots, 10000$.
 
-From our results in @fig-skew-alpha-results, we see that even at extreme skews of $\alpha=50$ the asymptotic factor recovery is essentially invariant to the choice of skewness parameter.The volatility of the convergence in finite samples is similarly comparable across alpha values, with no clear monotonic relationship between skewness and convergence speed. This confirms the QMLE consistency property in its strongest form, wherein the Kalman filter recovers the latent factor regardless of the magnitude of the skewness in the shock distribution (provided the regularity conditions on finite moments hold, in which they do for $\nu = 5$).
+From our results in @fig-skew-alpha-results, we see that even at extreme skews of $\alpha=50$ the asymptotic factor recovery is essentially invariant to the choice of skewness parameter.The volatility of the convergence in finite samples is similarly comparable across alpha values, with no clear monotonic relationship between skewness and convergence speed. This confirms the QMLE consistency property in its strongest form, wherein the Kalman filter recovers the latent factor regardless of the magnitude of the skewness in the shock distribution (provided the regularity conditions on finite moments hold, which they do for $\nu = 5$).
 
 ```{r skew-t increasing alphas interactive charts}
 library(plotly)
@@ -1242,19 +1242,19 @@ Together, these results provide formal evidence of the consistency without effic
 
 # Two-factor model {#sec-three}
 
-In this chapter we empirically examine how the Kalman filter behaves when the number of factors is misspecified. Specifically, we extend the original Stock & Watson framework by introducing four indicators from the price side of the economy, which are expected to share a second latent factor that tracks inflation rather than real activity. By mixing real and price indicators in a single-factor model, we deliberately misspecify the factor structure to illustrate what happens when variables are added blindly under the assumption that a larger dataset inherently yields a better fit.
+In this chapter we empirically examine how the Kalman filter behaves when the number of factors is misspecified. Specifically, we extend the original Stock and Watson framework by introducing four indicators from the price side of the economy, which are expected to share a second latent factor that tracks inflation rather than real activity. By mixing real and price indicators in a single-factor model, we deliberately misspecify the factor structure to illustrate what happens when variables are added blindly under the assumption that a larger dataset inherently yields a better fit.
 
 ## Parallel analysis to determine the number of factors {#sec-one-factor-specification}
 
-Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
+Before estimating the extended model, we determine the number of factors in the original Stock and Watson model.
 
-In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng @BaiNg2002, which minimize unexplained variance while applying a penalty for each additional factor. However, this criteria is derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Indeed, as Bai and Ng note: *"When* $min\{N, T\}$ *is 40 or larger, the proposed tests give precise estimates of the number of factors. Since our theory is based on large* $N$ *and large* $T$*, it is not surprising that for very small* $N$ *or* $T$*, the proposed criteria are inadequate."*
+In nowcasting applications, the optimal number of factors is typically determined using the information criteria proposed by Bai and Ng @BaiNg2002, which minimize unexplained variance while applying a penalty for each additional factor. However, these criteria are derived for static factor models and is consistent only for $T,N \rightarrow \infty$, where $N$ is the number of variables and $T$ is the time dimension. Indeed, as Bai and Ng note: *"When* $min\{N, T\}$ *is 40 or larger, the proposed tests give precise estimates of the number of factors. Since our theory is based on large* $N$ *and large* $T$*, it is not surprising that for very small* $N$ *or* $T$*, the proposed criteria are inadequate."*
 
-Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors. We therefore use parallel analysis, originally proposed by @Horn1965 to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
+Given that our sample lacks the large cross-sectional dimension required by these criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors. We therefore use parallel analysis, originally proposed by @Horn1965 to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
 
 In the standard static application, the idiosyncratic component is simulated as white noise. To better adapt this to our dynamic application, we generate noise data from an AR(2) process using a Monte Carlo approach with 500 simulations. For each iteration, we use the same number of observations as our sample ($633$), applying the coefficients and variances derived from the Kalman filter estimates in @sec-mapping-factor. Finally, we average the eigenvalues across all 500 simulations to construct a noise benchmark that accurately takes into account the time-dependence structure of our data. 
 
-The results of running parallel analysis on the original Stock and Watson model are displayed in @fig-parallel1. The first eigenvalue has a magnitude of $2.750$, well above the AR(2) noise benchmark of $1.090$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.642$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
+The results of running parallel analysis on the original Stock and Watson model are displayed in @fig-parallel1. The first eigenvalue has a magnitude of $2.750$, well above the AR(2) noise benchmark of $1.090$, providing evidence of a dominant common factor driving the co-movements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.642$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
 ```{r parallel analysis single factor}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
@@ -1475,7 +1475,7 @@ if (file.exists("results/stock_watson_2.RData")){
 }
 ```
 
-The result of running parallel analysis on the augmented dataset is shown in @fig-parallel2. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.158$ (versus a benchmark of $1.197$), and the second is around $2.606$ (against $1.112$). All the other eigenvalues drop below the noise benchmark. Hence, this analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the comovements of the original four indicators.
+The result of running parallel analysis on the augmented dataset is shown in @fig-parallel2. Notably, both the first and the second observed eigenvalues exceed the AR(2) noise benchmark. The first eigenvalue is approximately $3.158$ (versus a benchmark of $1.197$), and the second is around $2.606$ (against $1.112$). All the other eigenvalues drop below the noise benchmark. Hence, this analysis suggests that the four indicators we have added to the dataset share a common latent factor that reflects price pressures in the economy, which is distinct from the real business cycle factor that drives the co-movements of the original four indicators.
 
 ```{r parallel analysis two factor}
 ### PARALLEL ANALYSIS WITH AR(2) SIMULATION ###
