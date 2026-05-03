@@ -1,6 +1,8 @@
 ---
-title: "Estimating latent factors in dynamic models: the Kalman filter"
+title: "Estimating latent factors in dynamic models"
+subtitle: "The Kalman filter under misspecification"
 author: "Francesco Zucca, Michael Fehl"
+date: "May 2026"
 format:
   html:
     toc: true
@@ -8,14 +10,15 @@ format:
     toc-depth: 3
     code-fold: true
     code-tools: true
-  pdf:
+  PrettyPDF-pdf:
+    titlepage: true
     toc: true
     highlight-style: github
     toc-depth: 3
     number-sections: false
+    fig-width: 6.7
+    fig-height: 4.0
     fig-pos: "H"
-    geometry:
-      - margin=1in
     include-in-header:
       text: |
         \usepackage{float}
@@ -40,6 +43,8 @@ library("kableExtra")
 library("patchwork")
 ```
 
+\newpage
+
 # Abstract
 
 In a 1988 working paper, Stock and Watson proposed a framework to estimate and forecast short-run U.S. economic activity. Their model built on the premise that co-movements across multiple macroeconomic variables can be captured by a single, unobserved latent variable. Specifically, they hypothesized that their four chosen indicators form a dynamic single-factor model in which the latent factor represents the state of the business cycle and can therefore be mapped to Gross Domestic Product (GDP) growth @S&W1988.
@@ -49,6 +54,8 @@ This project empirically tests the Kalman filter under two different forms of mi
 Next, we assess the robustness of the Kalman filter to violation of the Gaussianity assumption. Since macroeconomic data frequently exhibits heavy tailed and asymmetric behaviors, we simulate economies under progressively more elliptical and skewed distributions. We find that convergence to the true latent factor is faster under Gaussian errors and slows as distributions become more elliptical or skewed. However, the Kalman filter continues to recover the true factor in large samples across all specifications.
 
 Finally, we expand the number of indicators, including price-side variables and therefore introducing a second latent factor into the data-generating process. Estimating a single-factor model on this augmented dataset, we find that the Kalman filter recovers only the real-activity factor, assigning loadings close to zero to all price indicators. After re-estimating the model under the correct two-factor specification, the Kalman filter successfully recovers both the real-activity factor and price-pressure factor, yielding an $R^2$ of $0.761$ against GDP growth and $0.732$ against PCEPI inflation.
+
+\newpage
 
 # 1. The Stock & Watson model {#sec-one}
 
@@ -74,11 +81,13 @@ Where:
 -   $f_t$ is the $(1 \times 1)$ factor scalar at time $t$
 -   $e_t$ is the $(4 \times 1)$ vector of errors at time $t$
 
-Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the graphical model represented in @fig-S&W.
+Noticeably, to capture the cyclic pattern of business cycles, both the factor and the error follow an $AR(2)$ process. Visually, the model can be represented by the graphical model represented in @fig-SW.
 
 ```{r}
-#| label: fig-S&W
+#| label: fig-SW
 #| fig-cap: "Stock & Watson dynamic factor model [@S&W1988]"
+#| out-width: "100%"
+#| fig-align: "center"
 #| echo: false
 
 knitr::include_graphics("images/S&W_model.png")
@@ -90,7 +99,7 @@ $$y_{i,t} \perp\!\!\!\perp y_{j,t} \mid f_t \quad \forall\, i \neq j$$
 
 Second, since both the factor and the errors follow an AR(2) process, given the state vector $h_t$ current indicators are conditionally independent of all future and past observations. Formally:
 
-$$y_t \perp\!\!\!\perp \{y_s\}_{s \neq t} \mid h_{t}$$
+$$y_t \perp\!\!\!\perp y_s \mid h_{t} \quad \forall\ t \neq s$$
 
 Where:
 
@@ -301,7 +310,7 @@ dfm <- function(data, r = 1, maxit = 2000) {
 }
 ```
 
-## 1.1. Latent factor estimation {#kalman-filter}
+## 1.1. Latent factor estimation {#sec-kalman-filter}
 
 Given that the model is linear and that shocks $w_t$ and $\epsilon_t$ are assumed to be Gaussian and independent, the optimal estimator for the latent factor is the Kalman filter [@kalman1960]. At each period $t$, the filter proceeds in two steps. In the prediction step, it forecasts the state vector $h_t$ from the previous estimate using the transition equation. In the update step, after observing $y_t$, it computes the prediction error and corrects the state estimate:
 
@@ -315,7 +324,9 @@ The Kalman filter, however, requires the errors of the measurement equation $e_t
 -   The measurement equation: $y_t = H h_{t}$
 -   The factor transition equation: $h_{t} = Fh_{t-1} + v_{t}, \quad v_{t} \overset{\mathrm{i.i.d.}}{\sim} \mathcal{N}(0,\sigma)$
 
-Optimal parameters are estimated via Gaussian Maximum Likelihood ($[\lambda_1, \dots, \lambda_4, \phi_1, \phi_2, \psi_{11}, \dots \psi_{42}, \sigma_1^2, \dots, \sigma_4^2 ]'_{(18 \times 1)}$)
+The vector of optimal parameters is estimated via Gaussian Maximum Likelihood, where:
+
+$$\theta = [\lambda_1, \dots, \lambda_4, \phi_1, \phi_2, \psi_{11}, \dots \psi_{42}, \sigma_1^2, \dots, \sigma_4^2 ]'_{(18 \times 1)}$$
 
 ## 1.2. Mapping the latent factor to GDP growth
 
@@ -448,7 +459,6 @@ ss_res <- sum(residuals^2)
 r_squared <- 1 - (ss_res / ss_tot)
 ```
 
-
 ```{r plot s_w, echo=FALSE}
 #| label: fig-fit1
 #| fig-cap: "Fitted vs. actual GDP quarterly growth, original Stock and Watson Model"
@@ -491,11 +501,18 @@ ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   )
 ```
 
+```{r save fit1, eval=TRUE, echo=FALSE}
+# save plot image
+ggsave(filename = "images/fit1.png",
+       width=8, height=5, dpi=300)
+```
+
 As reported in @tbl-fit1-estimates, all four indicators load positively on the estimated factor, in decreasing order of magnitude: *IPMAN* ($\hat{\lambda} = 0.926$), *PAYEMS* ($\hat{\lambda} = 0.782$), *CMRMTSPL* ($\hat{\lambda} = 0.711$), and *W875RX1* ($\hat{\lambda} = 0.525$). The results are consistent with the original S&W estimates, where all indicators also had positive loading and industrial production also carried the largest loading ($0.717$) [@S&W1988].
 
 ```{r}
 #| label: tbl-fit1-estimates
 #| tbl-cap: "Maximum likelihood estimates of the Stock and Watson model"
+#| tbl-pos: "H"
 
 # Building the table
 psi <- fit1$psi$est
@@ -526,24 +543,27 @@ sw_table <- data.frame(
 )
 
 knitr::kable(sw_table, 
+             format    = "latex", 
+             booktabs  = TRUE,   
              col.names = c("Parameter", "IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1"),
              align     = c("l", "c", "c", "c", "c"),
              escape    = FALSE) %>%
-  kableExtra::kable_styling(full_width = FALSE, 
-                            bootstrap_options = c("striped", "hover")) %>%
+  kableExtra::kable_styling(full_width = FALSE) %>% 
   kableExtra::add_header_above(c("Coincident Indicator" = 5)) %>%
   kableExtra::footnote(
-  general       = "Standard errors in parentheses.",
-  general_title = "",
-  footnote_as_chunk = TRUE
-)
+    general           = "Standard errors in parentheses.",
+    general_title     = "",
+    footnote_as_chunk = TRUE
+  )
 ```
+
+\newpage
 
 # 2. Breaking Gaussianity {#sec-two}
 
-The dynamic factor model proposed by Stock and Watson explicitly assumes that all structural shocks are purely Gaussian, which grants it the property of being the minimum mean square error (MMSE) estimator of the latent factor, as proven by @hamilton1994 [Section 13.2].[^mmse-proof] However, economic cycles frequently feature sudden and massive shocks (e.g. the COVID-19 crisis), hence macroeconomic indicators are rarely normally distributed. Instead, they tend to exhibit heavy-tailed behavior. As illustrated in the Quantile-Quantile (Q-Q) plot below, the distribution of our indicators indeed deviates from normality, confirming the presence of fat tails.
+The dynamic factor model proposed by Stock and Watson explicitly assumes that all structural shocks are purely Gaussian, which grants it the property of being the minimum mean square error (MMSE) estimator of the latent factor, as proven by @hamilton1994 [Section 13.2].[^1] However, economic cycles frequently feature sudden and massive shocks (e.g. the COVID-19 crisis), hence macroeconomic indicators are rarely normally distributed. Instead, they tend to exhibit heavy-tailed behavior. As illustrated in the Quantile-Quantile (Q-Q) plot below, the distribution of our indicators indeed deviates from normality, confirming the presence of fat tails.
 
-[^mmse-proof]: This follows from the fact that the model is linear and that shocks $w_t$ and $\epsilon_t$ are assumed to be Gaussian and independent; the conditional expectation $\mathbb{E}[h_t | y_{1:t}]$ minimizes mean squared error among all measurable functions of $y_{1:t}$. See @hamilton1994 [Section 4.1] for a standard proof.
+[^1]: This follows from the fact that the model is linear and that shocks $w_t$ and $\epsilon_t$ are assumed to be Gaussian and independent; the conditional expectation $\mathbb{E}[h_t | y_{1:t}]$ minimizes mean squared error among all measurable functions of $y_{1:t}$. See @hamilton1994 \[Section 4.1\] for a standard proof.
 
 ```{r QQ plots, echo=FALSE}
 ### CHECKING NORMALITY ASSUMPTION ###
@@ -570,19 +590,19 @@ p_qq <- ggplot(plot_data, aes(sample = Value_Scaled)) +
 print(p_qq)
 ```
 
-Despite the violation of the normality assumption, the Kalman filter extracts a consistent estimate of the latent factor. Indeed, when the parameters are estimated via Gaussian quasi-maximum likelihood, consistency of the parameter estimates is preserved under non-Gaussianity, though with loss of efficiency in finite samples as the distribution moves away from Gaussianity and gets increasingly elliptical [@white1982]. 
+Despite the violation of the normality assumption, the Kalman filter extracts a consistent estimate of the latent factor. Indeed, when the parameters are estimated via Gaussian quasi-maximum likelihood, consistency of the parameter estimates is preserved under non-Gaussianity, though with loss of efficiency in finite samples as the distribution moves away from Gaussianity and gets increasingly elliptical [@white1982].
 
-The reason for this is that under a misspecified likelihood, the Kalman gain is no longer optimal; therefore, the filter requires more observations to achieve the same precision as it would under correctly specified Gaussian shocks. This efficiency loss is particularly relevant for macroeconomic data, which, with fewer than 700 observations, can never be confidently characterized as truly Gaussian, and empirically exhibits heavy-tailed behavior consistent with a student-t distribution @geweke1993 [Table 1].[^geweke] We evaluate this by simulating the S&W data generating process under three distributional assumptions of increasing complexity: Gaussian, student-t, and skew-t, the latter of which introduces nonzero skewness via a slant parameter $\alpha \neq 0$.
+The reason for this is that under a misspecified likelihood, the Kalman gain is no longer optimal; therefore, the filter requires more observations to achieve the same precision as it would under correctly specified Gaussian shocks. This efficiency loss is particularly relevant for macroeconomic data, which, with fewer than 700 observations, can never be confidently characterized as truly Gaussian, and empirically exhibits heavy-tailed behavior consistent with a student-t distribution @geweke1993 [Table 1].[^2] We evaluate this by simulating the S&W data generating process under three distributional assumptions of increasing complexity: Gaussian, student-t, and skew-t, the latter of which introduces nonzero skewness via a slant parameter $\alpha \neq 0$.
 
-[^geweke]: @geweke1993 specifically tests on fourteen macroeconomic indicators including Industrial Production, Employment, and Real GNP, finding overwhelmingly positive evidence against normality at decreasing degrees of freedom ($\nu = 20, 10, 5, 3, 1$), in favor of student-t errors at low-to-moderate degrees of freedom. This motivates our decision to use student-t and naturally skew-t as distributional assumptions away from normality, with our degrees of freedom chosen as $\nu = 5$ in the simulations.
+[^2]: @geweke1993 specifically tests on fourteen macroeconomic indicators including Industrial Production, Employment, and Real GNP, finding overwhelmingly positive evidence against normality at decreasing degrees of freedom ($\nu = 20, 10, 5, 3, 1$), in favor of student-t errors at low-to-moderate degrees of freedom. This motivates our decision to use student-t and naturally skew-t as distributional assumptions away from normality, with our degrees of freedom chosen as $\nu = 5$ in the simulations.
 
-To better understand this phenomenom, we generate synthetic data based on our coefficient estimates derived from (section 1.2) that increasingly diverge from normality. We first understand the behavior of the efficient parameters derived under Gaussian distribution in @gaussian-dist, after which we move into a typical finite-sample distribution of student-t in @student-t-dist, and finally we explore more complex distributions such as skew-t with varying degrees of skew in @skew-t-dist to understand where exactly the filter breaks down.
+To better understand this phenomenom, we generate synthetic data based on our coefficient estimates derived from (section 1.2) that increasingly diverge from normality. We first understand the behavior of the efficient parameters derived under Gaussian distribution in @sec-gaussian-dist, after which we move into a typical finite-sample distribution of student-t in @sec-student-t-dist, and finally we explore more complex distributions such as skew-t with varying degrees of skew in @sec-skew-t-dist to understand where exactly the filter breaks down.
 
-## 2.1 Gaussian Distribution {#gaussian-dist}
+## 2.1 Gaussian Distribution {#sec-gaussian-dist}
 
 To simulate Gaussian data into our Kalman filter, we generate a structured array of various sample sizes to evaluate how the estimator performs in finite samples and what happens to its performance as $T \rightarrow \infty$.
 
-For each sample size, we generate a true latent factor following an AR(2) process with coefficient values of $\hat{\phi}_1 = $ `r fit1$phi$est[1]` and $\hat{\phi}_2 = $ `r fit1$phi$est[2]`, estimated from the S&W model in @kalman-filter, with Gaussian shocks by assumption. We then construct the observable data by multiplying the true factor by the estimated factor loadings from @kalman-filter and adding normally distributed idiosyncratic errors, replicating the structure of the S&W measurement equation.
+For each sample size, we generate a true latent factor following an AR(2) process with coefficient values of $\hat{\phi}_1 = s$ `r fit1$phi$est[1]` and $\hat{\phi}_2 = s$ `r fit1$phi$est[2]`, estimated from the S&W model in @sec-kalman-filter, with Gaussian shocks by assumption. We then construct the observable data by multiplying the true factor by the estimated factor loadings from @sec-kalman-filter and adding normally distributed idiosyncratic errors, replicating the structure of the S&W measurement equation.
 
 The simulated observables are normalized and fed into the Kalman filter, and the correlation between the estimated factor $\hat{f}_t$ and the true factor $f_t$ is recorded across all sample sizes.
 
@@ -621,7 +641,7 @@ cor(f_hat, f_true)
 
 We first run a single iteration across sample sizes generated from `seq(10, 10000, by = 50)`, such that the lower bound captures realistic finite sample sizes representative of macroeconomic datasets, while the upper bound approaches the asymptotic nature of a dataset, where the property of consistency is expected to hold.
 
-```{r gaussian test run, eval=FALSE}
+```{r gaussian test run, eval=TRUE}
 # one iteration
 TT <- seq(10, 10000, by = 50)
 results1 <- data.frame(
@@ -630,12 +650,12 @@ results1 <- data.frame(
 )
 ```
 
-```{r save gaussian, echo=FALSE, eval=FALSE}
+```{r save gaussian, echo=FALSE, eval=TRUE}
 # save sim results
 save(results1, file = "results/gaussian_results.RData")
 ```
 
-```{r gaussian plotting data, echo=FALSE}
+```{r gaussian plotting data, echo=TRUE}
 # load in data
 load(file = "results/gaussian_results.RData")
 
@@ -646,7 +666,7 @@ results_long1 <- results1 %>%
                values_to = "Correlation")
 ```
 
-```{r compute convergence value, echo=FALSE, eval=FALSE}
+```{r compute convergence value, echo=FALSE, eval=TRUE}
 # CHECK: what is the value converging to asymptotically?
 asymptotic_cor <- mean(replicate(50, run_gaussian(50000)))
 saveRDS(object = asymptotic_cor, 
@@ -683,7 +703,7 @@ ggplot(results_long1, aes(x = sample_size,
         plot.caption = element_text(hjust=0.5))
 ```
 
-```{r save gaussian plot, eval=FALSE, echo=FALSE}
+```{r save gaussian plot, eval=TRUE, echo=FALSE}
 # save plot image
 ggsave(filename = "images/gaussian_plot.png",
        width=8, height=5, dpi=300)
@@ -691,11 +711,11 @@ ggsave(filename = "images/gaussian_plot.png",
 
 We see from @fig-gaussian that factor recovery under Gaussian shocks is stable across all sample sizes, with correlation between the estimated and true factor converging to approximately `r asymptotic_cor` as $T$ grows. The relatively high recovery even at small sample sizes is consistent with the Kalman filter being the minimum variance estimator under correctly specified Gaussian shocks, confirming that no efficiency loss is present when the distributional assumption holds.
 
-## 2.2 Student-t Distribution {#student-t-dist}
+## 2.2 Student-t Distribution {#sec-student-t-dist}
 
 To break the assumption of Gaussianity, we simulate the S&W data generating process under a student-t distribution, which is well documented as a realistic characterization of finite sample macroeconomic data [@geweke1993].
 
-Theoretically, given the QMLE consistency property, we should expect the Kalman filter to remain consistent in its recovery of the latent factor, meaning the estimates converge to the true factor as $T \rightarrow \infty$. However, we expect to observe an efficiency loss in finite samples, as the Kalman gain is derived under the Gaussian likelihood and is therefore suboptimal when the true distribution has heavier tails [@white1982; @DurbinKoopman2012]. Here we select the degrees of freedom to be $\nu = 5$, as supported by empirical results from @geweke1993 [Table 1], as the posterior odds ratio strongly support student-t distribution at this level. Lower values of $\nu$ would generate extreme draws too frequently to match the empirical behavior of macroeconomic data, where shocks like the COVID-19 disruption are severe but rare. The choice $\nu = 5$ is also the lowest degree of freedom at which both the variance and kurtosis of the student-t distribution remain finite, satisfying the regularity conditions required for QMLE consistency (where finite fourth moments and non-zero variance are required; see @white1982 [Theorem 3.3]).
+Theoretically, given the QMLE consistency property, we should expect the Kalman filter to remain consistent in its recovery of the latent factor, meaning the estimates converge to the true factor as $T \rightarrow \infty$. However, we expect to observe an efficiency loss in finite samples, as the Kalman gain is derived under the Gaussian likelihood and is therefore suboptimal when the true distribution has heavier tails [@white1982; @DurbinKoopman2012]. Here we select the degrees of freedom to be $\nu = 5$, as supported by empirical results from @geweke1993 \[Table 1\], as the posterior odds ratio strongly support student-t distribution at this level. Lower values of $\nu$ would generate extreme draws too frequently to match the empirical behavior of macroeconomic data, where shocks like the COVID-19 disruption are severe but rare. The choice $\nu = 5$ is also the lowest degree of freedom at which both the variance and kurtosis of the student-t distribution remain finite, satisfying the regularity conditions required for QMLE consistency (where finite fourth moments and non-zero variance are required; see @white1982 [Theorem 3.3]).
 
 ```{r student_t function, echo=FALSE}
 run_student_t <- function(tt){
@@ -730,7 +750,7 @@ cor(f_hat, f_true)
 }
 ```
 
-```{r student_t test run, eval=FALSE}
+```{r student_t test run, eval=TRUE}
 # one iteration
 TT <- seq(10, 10000, by = 50)
 results2 <- data.frame(
@@ -739,7 +759,7 @@ results2 <- data.frame(
 )
 ```
 
-```{r save student t, echo=FALSE, eval=FALSE}
+```{r save student t, echo=FALSE, eval=TRUE}
 # save sim results
 save(results2, file = "results/student_t_results.RData")
 ```
@@ -781,26 +801,25 @@ ggplot(results_long2, aes(x = sample_size,
         plot.caption = element_text(hjust=0.5))
 ```
 
-```{r save student-t plot, eval=FALSE, echo=FALSE}
+```{r save student-t plot, eval=TRUE, echo=FALSE}
 # save plot image
 ggsave(filename = "images/student_t_plot.png",
        width=8, height=5, dpi=300)
 ```
 
-As illustrated in @fig-student-t, the Kalman filter remains consistent under student-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with the Gaussian baseline from @gaussian-dist.
+As illustrated in @fig-student-t, the Kalman filter remains consistent under student-t shocks, with factor recovery converging to approximately `r asymptotic_cor` as $T \rightarrow \infty$, in line with the Gaussian baseline from @sec-gaussian-dist.
 
 However, the trajectory is notably more volatile across sample sizes, particularly in the finite sample realm where the correlation fluctuates significantly before stabilizing. This is consistent with the theoretical prediction that the Kalman filter loses efficiency under heavy-tailed distributions, as the misspecified Gaussian likelihood produces a suboptimal Kalman gain that requires more observations to average out the influence of extreme draws.
 
 In other words, the fat tails of the student-t distribution introduce large idiosyncratic shocks that the filter struggles to separate from the common factor signal at small $T$, resulting in noisier factor recovery relative to the Gaussian case. Despite this finite-sample volatility, the asymptotic recovery converges to the same value as the Gaussian baseline, confirming that the QMLE consistency property holds even under substantial deviations from normality.
 
-## 2.3 Skew-t Distribution {#skew-t-dist}
+## 2.3 Skew-t Distribution {#sec-skew-t-dist}
 
 For a more complex distributional assumption, we simulate the S&W data generating process under a skew-t distribution, which extends the student-t by introducing asymmetry via a nonzero slant parameter $\alpha \neq 0$.
 
 Specifically, we set `alpha = 5` which induces a positive skew, meaning the distribution has a longer right tail relative to the symmetric student-t case. Note that our simulated factor shocks are generated as follows:
 
-`factor_shocks <- rst(tt, xi=0, omega=1, alpha=5, nu=5)`
-`factor_shocks <- factor_shocks - mean(factor_shocks)`
+`factor_shocks <- rst(tt, xi=0, omega=1, alpha=5, nu=5)` `factor_shocks <- factor_shocks - mean(factor_shocks)`
 
 The factor shocks are recentered by subtracting the sample mean, as the skew-t distribution has a nonzero mean when $\alpha \neq 0$, which would otherwise violate the zero mean assumption of the Kalman filter and introduce a systematic bias into the factor estimates.
 
@@ -843,7 +862,7 @@ cor(f_hat, f_true)
 }
 ```
 
-```{r skew_t test run, eval=FALSE}
+```{r skew_t test run, eval=TRUE}
 # one iteration
 TT <- seq(10, 10000, by = 50)
 results3 <- data.frame(
@@ -852,7 +871,7 @@ results3 <- data.frame(
 )
 ```
 
-```{r save skew_t, echo=FALSE, eval=FALSE}
+```{r save skew_t, echo=FALSE, eval=TRUE}
 # save sim results
 save(results3, file = "results/skew_t_results.RData")
 ```
@@ -894,7 +913,7 @@ ggplot(results_long3, aes(x = sample_size,
         plot.caption = element_text(hjust=0.5))
 ```
 
-```{r save skew-t plot, eval=FALSE, echo=FALSE}
+```{r save skew-t plot, eval=TRUE, echo=FALSE}
 # save plot object
 ggsave(filename= "images/skew_t_plot.png",
        width=8, height=5, dpi=300)
@@ -930,7 +949,7 @@ p <- ggplot(df, aes(x = x, y = density, color = alpha)) +
 ggplotly(p)
 ```
 
-```{r skew-t increasing alphas sim, eval=FALSE}
+```{r skew-t increasing alphas sim, eval=TRUE}
 # one iteration
 alphas <- c(1, 3, 5, 10, 20, 50)
 
@@ -940,37 +959,35 @@ results_extra <- expand.grid(sample_size = TT, alpha = alphas) %>%
   mutate(Correlation = mapply(run_skew_t, sample_size, alpha))
 ```
 
-```{r save skew t alphas, echo=FALSE, eval=FALSE}
+```{r save skew t alphas, echo=FALSE, eval=TRUE}
 # save sim results
-save(results_extra, file = "results/skew_t_alphas_results.RData")
+# save(results_extra, file = "results/skew_t_alphas_results.RData")
 ```
 
 ```{r skew-t alphas plotting data, echo=FALSE}
 # load in data
-load(file = "results/skew_t_alphas_results.RData")
+# load(file = "results/skew_t_alphas_results.RData")
 ```
-
 
 ```{r plot skew-t alpha sim results,echo=FALSE}
 # plot skew-t increasing alpha sim results
-ggplot(results_extra, aes(x = sample_size, 
-                          y = Correlation, 
-                          color = factor(alpha))) +
-  geom_line(linewidth = 0.8) +
-  scale_color_brewer(palette = "YlOrRd", name = "alpha") +
-  labs(title = "Factor recovery vs sample size, varying skewness",
-       x = "Sample size (TT)", y = "Correlation") +
-  theme_minimal() +
-  theme(legend.position = "bottom", 
-        plot.title = element_text(hjust=0.5))
+# ggplot(results_extra, aes(x = sample_size,
+#                           y = Correlation,
+#                           color = factor(alpha))) +
+#   geom_line(linewidth = 0.8) +
+#   scale_color_brewer(palette = "YlOrRd", name = "alpha") +
+#   labs(title = "Factor recovery vs sample size, varying skewness",
+#        x = "Sample size (TT)", y = "Correlation") +
+#   theme_minimal() +
+#   theme(legend.position = "bottom",
+#         plot.title = element_text(hjust=0.5))
 ```
 
 From our results, we see that (...).
 
-
 ## 2.4 Monte Carlo Simulation
 
-```{r mc sim, eval=FALSE}
+```{r mc sim, eval=TRUE}
 ####################################################################
 ## DO NOT RUN! Will take hours to complete, objects already saved ##
 ####################################################################
@@ -1046,7 +1063,7 @@ ggplot(data= results_long_all,
         plot.caption = element_text(hjust=0.5))
 ```
 
-```{r save mc plot, echo=FALSE, eval=FALSE}
+```{r save mc plot, echo=FALSE, eval=TRUE}
 # save plot object
 ggsave(filename = "images/mc_results_50_plot.png",
        width = 8, height = 5, dpi = 300)
@@ -1058,7 +1075,7 @@ Notably, both the student-t and skew-t distributions exhibit greater volatility 
 
 ## 2.5 Efficiency Loss under Non-Gaussian Data
 
-```{r variable table, eval=FALSE}
+```{r variable table, eval=TRUE}
 # run 200 replications, store all correlations
 n_reps <- 200
 TT_fixed <- 633  # actual sample size from FRED data
@@ -1076,7 +1093,7 @@ var_table <- data.frame(
 )
 ```
 
-```{r save variance table, echo=FALSE, eval=FALSE}
+```{r save variance table, echo=FALSE, eval=TRUE}
 # save table
 saveRDS(var_table, "results/var_table.rds")
 ```
@@ -1101,11 +1118,13 @@ As reported in @tbl-variance, the Gaussian estimator achieves the lowest varianc
 
 Together, these results provide formal evidence of the consistency without efficiency property of the Gaussian quasi-maximum likelihood Kalman filter: the estimator converges to the correct value under all three distributions, but requires significantly more observations to do so with the same precision when shocks are non-Gaussian.
 
+\newpage
+
 # 3. Two-Factor Model {#sec-three}
 
 In this chapter we empirically examine how the Kalman filter behaves when the number of factors is misspecified. Specifically, we extend the original Stock & Watson framework by introducing four indicators from the price side of the economy, which are expected to share a second latent factor that tracks inflation rather than real activity. By mixing real and price indicators in a single-factor model, we deliberately misspecify the factor structure to illustrate what happens when variables are added blindly under the assumption that a larger dataset inherently yields a better fit.
 
-## 3.1. Using Parallel Analysis to Determine the Number of Factors {#one-factor-specification}
+## 3.1. Using Parallel Analysis to Determine the Number of Factors {#sec-one-factor-specification}
 
 Before estimating the extended model, we determine the number of factors in the original Stock & Watson model.
 
@@ -1113,7 +1132,7 @@ In nowcasting applications, the optimal number of factors is typically determine
 
 Given that our sample lacks the large cross-sectional dimension required by this criteria and given the underlying assumption of a dynamic factor model, we adopt an alternative approach to determine the appropriate number of factors.
 
-We therefore use parallel analysis, originally proposed by Horn @Horn1965 to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
+We therefore use parallel analysis, originally proposed by @Horn1965 to address a weakness of the Kaiser rule which retains factors with eigenvalues greater than one. Horn argues that in finite samples the eigenvalues of a covariance matrix computed from pure noise are not exactly equal to one because of sampling variation. Therefore, by keeping all factors that exceed the unit cutoff, one usually overestimates the number of factors. Parallel analysis corrects for this by comparing the eigenvalues of the observed data with those obtained from simulated noise data, retaining only factors with an associated eigenvalue larger than the one of the noise benchmark.
 
 In the standard static application, the idiosyncratic component is simulated as white noise. To better adapt this to our dynamic application, we generate noise data from an AR(2) process using a Monte Carlo approach with 500 simulations. For each iteration, we use the same number of observations as our sample ($633$), applying the coefficients and variances derive from the Kalman filter estimates in *Chapter 1*. Finally, we average the eigenvalues across all 500 simulations to construct a noise benchmark that accurately takes into account the time-dependence structure of our data. The results of running parallel analysis on the original Stock and Watson model are displayed in @fig-parallel1. The first eigenvalue has a magnitude of $2.750$, well above the AR(2) noise benchmark of $1.090$, providing evidence of a dominant common factor driving the comovements across the four real-activity indicators. All remaining eigenvalues fall below the noise benchmark, with the second one already dropping sharply to around $0.642$, well below the noise threshold. Overall, parallel analysis supports the one-factor assumption of the original Stock and Watson model, with the four indicators driven by a single latent factor representing the business cycle.
 
@@ -1185,7 +1204,6 @@ eig_table <- data.frame(
 )
 ```
 
-
 ```{r parallel analysis plotting single factor, echo=FALSE}
 #| label: fig-parallel1
 #| fig-cap: "Parallel analysis with AR(2) simulated Noise, original Stock and Watson model."
@@ -1222,6 +1240,12 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
     axis.title       = element_text(size = 9.5),
     axis.text        = element_text(size = 8)
   )
+```
+
+```{r save parallel1 plot, eval=TRUE, echo=FALSE}
+# save plot object
+ggsave(filename = "images/parallel1_plot.png",
+       width = 8, height = 5, dpi = 300)
 ```
 
 ## 3.2. Introducing More Indicators {#two-factor-specification}
@@ -1438,6 +1462,12 @@ ggplot(plot_pa, aes(x = Index, y = Eigenvalue,
   )
 ```
 
+```{r save parallel2 plot, eval=TRUE, echo=FALSE}
+# save plot object
+ggsave(filename = "images/parallel2_plot.png",
+       width = 8, height = 5, dpi = 300)
+```
+
 As shown in @fig-fit2, the single factor estimated on the augmented eight-indicator dataset continues to track real economic activity, though with worse performance compared to the Stock and Watson model. Indeed, its fit to actual GDP growth deteriorates to an $R^2$ of $0.711$ and an MSE of $0.336$, against the baseline model's $R^2$ of $0.763$ and MSE of $0.276$. Interestingly, despite the inclusion of *PCEPI* in the indicator set, the estimated factor fails to capture inflation dynamics altogether, yielding an $R^2$ of just $0.011$ against monthly *PCEPI* growth.
 
 ```{r mapping two factor to GDP}
@@ -1578,19 +1608,24 @@ p2 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
   )
 ```
 
-
 ```{r mapping two factor to inflation plots, echo=FALSE}
 #| label: fig-fit2
-#| tbl-cap: "Fitted vs. actual GDP and inflation growth, misspecified augmented model."
+#| fig-cap: "Fitted vs. actual GDP and inflation growth, misspecified augmented model."
 
 p1 + p2
+```
+
+```{r save fit2 plot, eval=TRUE, echo=FALSE}
+# save plot object
+ggsave(filename = "images/fit2_plot.png",
+       width = 8, height = 5, dpi = 300)
 ```
 
 The factor loadings reported in @tbl-fit2-estimates make the situation clearer. The four real-activity indicators all receive positive and significant loadings, between $0.484$ and $0.967$, while the four price indicators are assigned loadings closer to zero. The Kalman filter essentially estimates the original business cycle factor, discarding most of the information brought by the price indicators.
 
 ```{r two factor loadings}
 #| label: tbl-fit2-estimates
-#| tbl-cap: "Maximum likelihood estimates of the misspecified augmented model."
+#| fig-cap: "Maximum likelihood estimates of the misspecified augmented model."
 
 indicators <- c("IPMAN", "CMRMTSPL", "PAYEMS", "W875RX1",
                 "CPIAUCSL", "CPILFESL", "PCEPI", "PPIACO")
@@ -1623,13 +1658,15 @@ knitr::kable(sw_table,
   )
 ```
 
-To explain this outcome, we draw a parallel to Probabilistic Principal Component Analysis (PPCA). Simplifying to a static cross-sectional case, our measurement equation reduces to $y_t = \lambda f_{t} + e_{t}$, or, in matrix notation, $y = \Lambda f + e$. As shown by @tippingbishop1999, when $\mathbf{y} \sim \mathcal{N}(\mathbf{0}, \mathbf{C})$, with $C = \mathbf{\Lambda} \mathbf{\Lambda}^{T} + \sigma^2 I$, then the likelihood is maximized when:
+To explain this outcome, we draw a parallel to Probabilistic Principal Component Analysis (PPCA). Simplifying to a static cross-sectional case, our measurement equation reduces to $y_t = \lambda f_{t} + e_{t}$, or, in matrix notation, $y = \Lambda f + e$. As shown by @tippingbishop1999, when $y \sim N(0, C)$, with $C = \Lambda \Lambda^{T} + \sigma^2 I$, then the likelihood is maximized when:
 
-$$ \mathbf{\Lambda_{ML}} = \mathbf{U}(\mathbf{D} - \sigma^2 \mathbf{I}) ^{1/2}\mathbf{R} $$
+$$ \Lambda_{ML} = U(D - \sigma^2 I) ^{1/2}R $$
 
-where the $q$ column vectors in the $N \times q$ matrix $\mathbf{U}$ are the principal eigenvectors of the sample covariance matrix $\mathbf{S}$, with corresponding eigenvalues $d_1, \ldots, d_q$ in the $q \times q$ diagonal matrix $\mathbf{D}$, and $\mathbf{R}$ is an arbitrary $q \times q$ orthogonal rotation matrix. Under our single-factor specification ($q = 1$), the rotation matrix vanishes and the expression collapses to:
+where the $q$ column vectors in the $N \times q$ matrix $U$ are the principal eigenvectors of the sample covariance matrix $S$, with corresponding eigenvalues $d_1, \ldots, d_q$ in the $q \times q$ diagonal matrix $D$, and $R$ is an arbitrary $q \times q$ orthogonal rotation matrix. Under our single-factor specification ($q = 1$), the rotation matrix vanishes and the expression collapses to:
 
-$$ \mathbf{\lambda_{ML}} = \mathbf{u}(d - \sigma^2)^{1/2} $$ Since $\mathbf{u}(d - \sigma^2)^{1/2}$ is a scalar, the direction of $\mathbf{\lambda_{ML}}$ is entirely determined by the leading eigenvector $\mathbf{u}$ of the sample covariance matrix $\mathbf{S}$, which loads on the block associated to the largest eigenvalue. As reported in @fig-corr, we have an approximately two-block sample covariance matrix structure, where the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.76$, and the ones in the price group range from $0.24$ to $0.92$. Moreover, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$, suggesting that the two groups are uncorrelated. Given that the Maximum Likelihood Estimator in this case maximizes whichever direction corresponds to the highest eigenvalue, the Kalman filter in this case recovers the business cycle factor, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idiosyncratic error terms.
+$$ \lambda_{ML} = u(d - \sigma^2)^{1/2} $$ 
+
+Since $u(d - \sigma^2)^{1/2}$ is a scalar, the direction of $\lambda_{ML}$ is entirely determined by the leading eigenvector $u$ of the sample covariance matrix $S$, which loads on the block associated to the largest eigenvalue. As reported in @fig-corr, we have an approximately two-block sample covariance matrix structure, where the pairwise correlations in the real-activity indicators group range from $0.40$ to $0.76$, and the ones in the price group range from $0.24$ to $0.92$. Moreover, the pairwise correlations across groups are all close to zero, ranging from $-0.12$ to $0.23$, suggesting that the two groups are uncorrelated. Given that the Maximum Likelihood Estimator maximizes whichever direction corresponds to the highest eigenvalue, the Kalman filter in this case recovers the business cycle factor, assigning loadings close to zero to the price indicators and therefore absorbing the price variation into the idiosyncratic error terms.
 
 ```{r correlation matrix}
 #| label: fig-corr
@@ -1809,20 +1846,24 @@ p2 <- ggplot(plot_data, aes(x = Index, y = Value, color = Series)) +
 
 ```{r two factor mapping to inflation correct spec plots, echo=FALSE}
 #| label: fig-fit3
-#| tbl-cap: "Fitted vs. actual GDP and inflation growth, correctly specified augmented model."
+#| fig-cap: "Fitted vs. actual GDP and inflation growth, correctly specified augmented model."
 
 p1 + p2
 ```
 
+```{r save fit3 plot, eval=TRUE, echo=FALSE}
+# save plot object
+ggsave(filename = "images/fit3_plot.png",
+       width = 8, height = 5, dpi = 300)
+```
+
 As reported in @tbl-fit3-estimates, *factor 1* indeed loads heavily on the real-activity indicators (between $0.528$ and $0.924$), while assigning loadings near zero to all four price indicators (between $0.074$ and $0.161$). Conversely, *factor 2* loads strongly on price indicators (between $0.195$ and $0.734$) while assigning near-zero loadings to the real-activity ones (between $-0.151$ and $0.050$).
 
-To achieve identification, we impose a lower-triangular restriction on the loading matrix $\mathbf{\Lambda}$. This is because a factor model $\mathbf{y} = \mathbf{\Lambda}\mathbf{f} + \mathbf{e}$ is invariant to orthogonal rotations $\mathbf{Q}$, as:
+To achieve identification, we impose a lower-triangular restriction on the loading matrix $\Lambda$. This is because a factor model $y = \Lambda f + e$ is invariant to orthogonal rotations $Q$, as:
 
-$$
-(\mathbf{\Lambda}\mathbf{Q})(\mathbf{Q}^\top \mathbf{f}) = \mathbf{\Lambda}(\mathbf{Q}\mathbf{Q}^\top)\mathbf{f} = \mathbf{\Lambda}\mathbf{I}\mathbf{f} = \mathbf{\Lambda}\mathbf{f}
-$$
+$$(\Lambda Q)(Q^\top f) = \Lambda (Q Q^\top) f = \Lambda I f = \Lambda f$$
 
-Hence, infinitely many rotations of the same factor model produce the same likelihood and the model is unidentified without additional constraints. We therefore set the upper-right triangle of $\mathbf{\Lambda}$ to zero, which for two factors requires setting $\frac{q(q-1)}{2} = \frac{2(2-1)}{2} = 1$ restriction [@gewekezhou1996]. Consistently with this, we set the loading of *IPMAN* on *factor 2* to zero by construction.
+Hence, infinitely many rotations of the same factor model produce the same likelihood and the model is unidentified without additional constraints. We therefore set the upper-right triangle of $\Lambda$ to zero, which for two factors requires setting $\frac{q(q-1)}{2} = \frac{2(2-1)}{2} = 1$ restriction [@gewekezhou1996]. Consistently with this, we set the loading of *IPMAN* on *factor 2* to zero by construction.
 
 ```{r two factor lambda loadings correct spec}
 #| label: tbl-fit3-estimates
@@ -1865,18 +1906,22 @@ knitr::kable(sw_table, align = c("l", rep("c", 8)), escape = FALSE) %>%
                        general_title = "", footnote_as_chunk = TRUE)
 ```
 
+\newpage
+
 # Conclusion
 
 This paper examined the robustness of the Kalman filter as an estimator for dynamic factor models, using the Stock and Watson (1988) framework as our model specification to play with. We subjected the filter to two forms of misspecification: violations of the Gaussianity assumption on the shock distribution, and misspecification of the number of latent factors. Taken together, the results illustrated where the Kalman filter precisely breaks down, how severely, and where it holds strong.
 
-The simulations in @sec-two confirm the theoretical QMLE consistency result: the Kalman filter recovers the latent factor regardless of whether shocks are Gaussian, student-t, or skew-t. All three distributions converge to the same asymptotic factor recovery correlation of approximately `r asymptotic_cor`. However, the cost of misspecification is paid in finite samples.  
+The simulations in @sec-two confirm the theoretical QMLE consistency result: the Kalman filter recovers the latent factor regardless of whether shocks are Gaussian, student-t, or skew-t. All three distributions converge to the same asymptotic factor recovery correlation of approximately `r asymptotic_cor`. However, the cost of misspecification is paid in finite samples.
 
-[still to do: connect the efficiency loss result to the intuition about the Kalman gain being misweighted under fat tails; i.e., the filter is over-responsive to extreme draws that are actually common under a t-distribution. probably should reference the variance table numbers from Section 2.5 to quantify this]
+\[still to do: connect the efficiency loss result to the intuition about the Kalman gain being misweighted under fat tails; i.e., the filter is over-responsive to extreme draws that are actually common under a t-distribution. probably should reference the variance table numbers from Section 2.5 to quantify this\]
 
-@sec-three illustrates a more severe failure mode. When the data-generating process contains two latent factors but the model is estimated with only one, the filter does not average across both factors, it selects the direction of maximum variance and discards the rest. In our application, the single-factor model collapses onto the real-activity factor and ignores the price information entirely. Note, however, that this is not a failure of the Kalman filter per se, but a failure of model specification the filter optimally solves the problem it is given. The parallel analysis in @one-factor-specification provides a practical diagnostic for detecting this misspecification before estimation. 
+@sec-three illustrates a more severe failure mode. When the data-generating process contains two latent factors but the model is estimated with only one, the filter does not average across both factors, it selects the direction of maximum variance and discards the rest. In our application, the single-factor model collapses onto the real-activity factor and ignores the price information entirely. Note, however, that this is not a failure of the Kalman filter per se, but a failure of model specification the filter optimally solves the problem it is given. The parallel analysis in @sec-one-factor-specification provides a practical diagnostic for detecting this misspecification before estimation.
 
-**Practical implications.** [idea that the Kalman filter is (surprisingly?) robust to distributional violations (QMLE consistency holds) but fragile to factor count misspecification (when trying to fit a model). In practice, diagnosing the number of factors before committing to a model is more important than worrying about whether shocks are exactly Gaussian.]
+**Practical implications.** \[idea that the Kalman filter is (surprisingly?) robust to distributional violations (QMLE consistency holds) but fragile to factor count misspecification (when trying to fit a model). In practice, diagnosing the number of factors before committing to a model is more important than worrying about whether shocks are exactly Gaussian.\]
 
-Several extensions are left for future work. First, our simulations assume a known and fixed model structure, including AR(2) factor and errors, and static loadings on the factor; allowing for time-varying loadings would more closely mirror the empirical applications in which the Kalman filter is deployed in central banks (@delnegrootrok2008). Second, we assess factor recovery via correlation with a known true factor, which is only feasible in simulation; in applied settings, the researcher never observes the truth, and alternative evaluation criteria [find something] would be needed. 
+Several extensions are left for future work. First, our simulations assume a known and fixed model structure, including AR(2) factor and errors, and static loadings on the factor; allowing for time-varying loadings would more closely mirror the empirical applications in which the Kalman filter is deployed in central banks (@delnegrootrok2008). Second, we assess factor recovery via correlation with a known true factor, which is only feasible in simulation; in applied settings, the researcher never observes the truth, and alternative evaluation criteria \[find something\] would be needed.
+
+\newpage
 
 # Bibliography
