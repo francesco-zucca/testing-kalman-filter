@@ -4,6 +4,17 @@
 
 Francesco Zucca and Michael Fehl, May 2026
 
+testing-kalman-filter/
+├── _extensions/nrennie/          # Quarto extension for theme of final export
+├── final-paper/                  # Final paper output
+├── images/                       # Figures and plots
+├── results/                      # Pre-exported results
+├── .gitignore
+├── README.md
+├── references.bib
+├── testing-kalman-filter.Rproj
+└── testing_kalman_filter.qmd     # MAIN FILE (R, Quarto document)
+
 ## Overview
 
 This project empirically studies the robustness of the Kalman filter as an estimator for dynamic factor models, using the Stock & Watson (1988) framework as the baseline specification. We examine two distinct forms of misspecification:
@@ -11,7 +22,7 @@ This project empirically studies the robustness of the Kalman filter as an estim
 1.  **Distributional**: non-Gaussian shocks (heavy-tailed or skewed)
 2.  **Structural misspecification**: number of latent factors is incorrectly specified
 
-## Structure
+## Chapters
 
 | Chapter | Description |
 |------------------------------|------------------------------------------|
