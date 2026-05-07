@@ -6,6 +6,7 @@ Francesco Zucca and Michael Fehl, May 2026
 
 ## Repository structure
 
+```
 testing-kalman-filter/
 ├── _extensions/nrennie/          # Quarto extension for theme of final export
 ├── final-paper/                  # Final paper output
@@ -16,6 +17,7 @@ testing-kalman-filter/
 ├── references.bib
 ├── testing-kalman-filter.Rproj
 └── testing_kalman_filter.qmd     # MAIN FILE (R, Quarto document)
+```
 
 ## Overview
 
