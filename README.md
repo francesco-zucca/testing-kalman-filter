@@ -4,6 +4,8 @@
 
 Francesco Zucca and Michael Fehl, May 2026
 
+## Repository structure
+
 testing-kalman-filter/
 ├── _extensions/nrennie/          # Quarto extension for theme of final export
 ├── final-paper/                  # Final paper output
