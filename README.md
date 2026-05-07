@@ -30,3 +30,7 @@ This project empirically studies the robustness of the Kalman filter as an estim
 ## Data
 
 All macroeconomic series are sourced from [FRED](https://fred.stlouisfed.org/): `IPMAN`, `CMRMTSPL`, `PAYEMS`, `W875RX1`, `CPIAUCSL`, `CPILFESL`, `PCEPI`, `PPIACO`, `GDPC1`
+
+## Replication
+
+To replicate run `testing_kalman_filter.qmd`. Results are already exported in the `results` folder for faster runtime. If you want to run everything from scratch, please change all `eval=FALSE` to `eval=TRUE` in the `.qmd` file.
